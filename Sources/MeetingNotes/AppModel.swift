@@ -1486,7 +1486,9 @@ final class AppModel {
       enrichmentRetryAvailable = false
       return
     }
-    guard await ChatGPTAuthService.shared.isAuthenticated() else {
+    if SummaryBackendSettingsStore.load().backend == .codex,
+      !(await ChatGPTAuthService.shared.isAuthenticated())
+    {
       enrichmentRetryAvailable = true
       return
     }
@@ -1500,7 +1502,7 @@ final class AppModel {
     var lastError: Error?
     var enrichedMeetingIDs: [UUID] = []
     for folder in folders {
-      guard state == .idle else { break }
+      guard state == .idle, SummaryBackendSettingsStore.load().backend != .off else { break }
       do {
         let meeting = try await store.load(folder: folder)
         let insights = try await enricher.enrich(

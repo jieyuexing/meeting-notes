@@ -17,13 +17,15 @@ actor OpenAIEnricher {
 
   enum EnrichmentError: LocalizedError {
     case notSignedIn
+    case disabled
     case invalidResponse(String)
     case refused(String)
 
     var errorDescription: String? {
       switch self {
+      case .disabled: "Meeting summaries are turned off in Settings."
       case .notSignedIn: "Sign in with ChatGPT in Settings to generate structured meeting notes."
-      case .invalidResponse(let detail): "OpenAI enrichment failed: \(detail)"
+      case .invalidResponse(let detail): "Meeting summary generation failed: \(detail)"
       case .refused(let detail): "OpenAI could not structure this transcript: \(detail)"
       }
     }
@@ -31,9 +33,8 @@ actor OpenAIEnricher {
 
   func enrich(_ meeting: MeetingDocument, checkpointURL: URL? = nil) async throws -> MeetingInsights
   {
-    guard await ChatGPTAuthService.shared.isAuthenticated() else {
-      throw EnrichmentError.notSignedIn
-    }
+    let backend = SummaryBackendSettingsStore.load()
+    try await checkBackend(backend)
     let participants =
       meeting.calendar?.participants.map(\.name).joined(separator: ", ") ?? "unknown"
     let tanaNames: [String]
@@ -61,7 +62,7 @@ actor OpenAIEnricher {
           title: meeting.title, participants: participants,
           transcript: chunks.first ?? "", part: nil, tanaNames: tanaNames,
           outputLanguage: outputLanguage, threadContext: threadContext
-        ))
+        ), backend: backend)
     } else {
       var partials = loadCheckpoint(at: checkpointURL, meeting: meeting) ?? []
       for (index, chunk) in chunks.enumerated().dropFirst(partials.count) {
@@ -71,16 +72,16 @@ actor OpenAIEnricher {
               title: meeting.title, participants: participants, transcript: chunk,
               part: "part \(index + 1) of \(chunks.count)", tanaNames: tanaNames,
               outputLanguage: outputLanguage
-            )))
+            ), backend: backend))
         try saveCheckpoint(
           partials, at: checkpointURL, meeting: meeting, outputLanguage: outputLanguage)
       }
       generated = try await consolidate(
         partials, title: meeting.title, participants: participants,
-        outputLanguage: outputLanguage, threadContext: threadContext)
+        outputLanguage: outputLanguage, threadContext: threadContext, backend: backend)
     }
     if let checkpointURL { try? FileManager.default.removeItem(at: checkpointURL) }
-    return normalize(generated, duration: meeting.transcript.map(\.end).max() ?? 0)
+    return normalize(generated, duration: meeting.transcript.map(\.end).max() ?? 0, backend: backend.backend)
   }
 
   private func loadCheckpoint(at url: URL?, meeting: MeetingDocument) -> [GeneratedInsights]? {
@@ -208,7 +209,8 @@ actor OpenAIEnricher {
 
   private func consolidate(
     _ inputs: [GeneratedInsights], title: String, participants: String,
-    outputLanguage: MeetingNotesLanguage, threadContext: String? = nil
+    outputLanguage: MeetingNotesLanguage, threadContext: String? = nil,
+    backend: SummaryBackendSettings
   ) async throws -> GeneratedInsights {
     var level = inputs
     let encoder = JSONEncoder()
@@ -236,27 +238,55 @@ actor OpenAIEnricher {
           PARTIAL INDEXES
           \(json)
           """
-        next.append(try await requestInsights(prompt: prompt))
+        next.append(try await requestInsights(prompt: prompt, backend: backend))
       }
       level = next
     }
     return level[0]
   }
 
-  private func requestInsights(prompt: String) async throws -> GeneratedInsights {
-    let schemaData = try JSONSerialization.data(withJSONObject: Self.schema, options: [.sortedKeys])
-    let selectedModel = model
-    let data = try await ChatGPTAuthService.shared.generateStructuredOutput(
-      prompt: prompt, schemaData: schemaData, model: selectedModel,
-      reasoningEffort: reasoningEffort)
-    do {
-      return try JSONDecoder().decode(GeneratedInsights.self, from: data)
-    } catch {
-      throw EnrichmentError.invalidResponse(error.localizedDescription)
+  private func checkBackend(_ settings: SummaryBackendSettings) async throws {
+    if settings.backend == .off { throw EnrichmentError.disabled }
+    if settings.backend == .codex, !(await ChatGPTAuthService.shared.isAuthenticated()) {
+      throw EnrichmentError.notSignedIn
     }
   }
 
-  private func normalize(_ generated: GeneratedInsights, duration: TimeInterval) -> MeetingInsights
+  /// Uses the production prompt, dispatch and decoder without touching a meeting or archive.
+  func testBackend(_ settings: SummaryBackendSettings) async throws -> String {
+    try await checkBackend(settings)
+    let prompt = transcriptPrompt(
+      title: "Summary backend test", participants: "unknown",
+      transcript: "[00:00] 今天决定周五发布新版，小王负责更新说明。",
+      part: nil, tanaNames: [], outputLanguage: MeetingNotesLanguageStore.load())
+    return try await requestInsights(prompt: prompt, backend: settings).summary
+  }
+
+  private func requestInsights(
+    prompt: String, backend: SummaryBackendSettings
+  ) async throws -> GeneratedInsights {
+    let schemaData = try JSONSerialization.data(withJSONObject: Self.schema, options: [.sortedKeys])
+    let data: Data
+    switch backend.backend {
+    case .codex:
+      data = try await ChatGPTAuthService.shared.generateStructuredOutput(
+        prompt: prompt, schemaData: schemaData, model: model, reasoningEffort: reasoningEffort)
+    case .command:
+      data = try await CommandSummaryBackend.generate(
+        command: backend.command, prompt: prompt, schemaData: schemaData)
+    case .off:
+      throw EnrichmentError.disabled
+    }
+    do {
+      return try JSONDecoder().decode(GeneratedInsights.self, from: data)
+    } catch {
+      throw EnrichmentError.invalidResponse("\(backend.backend.label): \(error.localizedDescription)")
+    }
+  }
+
+  private func normalize(
+    _ generated: GeneratedInsights, duration: TimeInterval, backend: SummaryBackend
+  ) -> MeetingInsights
   {
     func time(_ value: Double) -> Double { min(max(0, value), max(duration, 0)) }
     func evidence(_ values: [GeneratedEvidence]) -> [EvidenceItem] {
@@ -280,7 +310,8 @@ actor OpenAIEnricher {
       generatedAt: Date(),
       // With no model configured the bundled Codex CLI picks one, so the
       // provenance must not claim a ChatGPT account default was used.
-      generator: model.isEmpty ? "Codex default model" : "OpenAI \(model) via Codex"
+      generator: backend == .command ? "Custom summary command"
+        : (model.isEmpty ? "Codex default model" : "OpenAI \(model) via Codex")
     )
   }
 

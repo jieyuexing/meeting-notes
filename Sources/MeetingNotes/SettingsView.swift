@@ -535,6 +535,8 @@ private struct SummariesSettingsPane: View {
           subtitle: "Choose how finished meeting notes are written."
         )
 
+        SummaryBackendSettingsView()
+
         Divider()
 
         VStack(alignment: .leading, spacing: 8) {

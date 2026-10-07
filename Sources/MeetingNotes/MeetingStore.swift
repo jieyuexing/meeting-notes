@@ -751,13 +751,15 @@ actor MeetingStore {
   }
 
   func latestNeedsEnrichmentFolder() -> URL? {
-    latestFolder {
+    guard SummaryBackendSettingsStore.load().backend != .off else { return nil }
+    return latestFolder {
       $0.status == .complete && $0.insights == nil
         && $0.transcriptDeletedAt == nil && !$0.transcript.isEmpty
     }
   }
 
   func completedMeetingFoldersAwaitingInsights(before cutoff: Date) -> [URL] {
+    guard SummaryBackendSettingsStore.load().backend != .off else { return [] }
     return allStateURLs()
       .compactMap { url -> (URL, Date)? in
         guard let data = try? Data(contentsOf: url),
