@@ -46,9 +46,11 @@
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Meeting Notes captures system audio from calls for local transcription.</string>
 	<key>SUEnableAutomaticChecks</key>
-	<true/>
+	<false/>
+	<key>SUAllowsAutomaticUpdates</key>
+	<false/>
 	<key>SUFeedURL</key>
-	<string>https://raw.githubusercontent.com/foeken/meeting-notes/main/appcast.xml</string>
+	<string>https://raw.githubusercontent.com/jieyuexing/meeting-notes/jie-custom/fork-appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>+ugHEdgTcOnX+rridIwktMlQqu8Q3drmDCQgw3noUBc=</string>
 </dict>
