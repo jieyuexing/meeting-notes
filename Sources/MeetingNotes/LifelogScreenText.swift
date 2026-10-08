@@ -170,7 +170,7 @@ extension LifelogStore {
       output += "> 显示器 \(document.estimatedTimeDisplays.map(String.init).joined(separator: ", ")) 缺少首帧时间，时间按段起点估算。\n\n"
     }
     for entry in document.entries {
-      let span = entry.keyframes > 1
+      let span = entry.endedAt > entry.startedAt
         ? "\(clockText(entry.startedAt))–\(clockText(entry.endedAt))" : clockText(entry.startedAt)
       output += "### \(span) · 显示器 \(entry.displayID)\n\n````text\n"
       output += entry.lines.joined(separator: "\n")
@@ -246,17 +246,27 @@ enum LifelogScreenTextJob {
         }
         return .failed(message)
       }
+      // The video can stop before the segment closes (no frames while the
+      // screen is static); the last text of each display lasts to the end.
+      let segmentEnd = segment.endedAt ?? segment.media?.endedAt
+      var entries = extraction.entries
+      if let segmentEnd {
+        var seen = Set<UInt32>()
+        for index in entries.indices.reversed() where seen.insert(entries[index].displayID).inserted {
+          ScreenTextMerger.extend(&entries[index], to: segmentEnd)
+        }
+      }
       let document = ScreenTextDocument(segmentID: segment.id, segmentStartedAt: segment.startedAt,
-        segmentEndedAt: segment.endedAt ?? segment.media?.endedAt, generatedAt: now(),
+        segmentEndedAt: segmentEnd, generatedAt: now(),
         engine: LifelogStore.screenTextEngine, estimatedTimeDisplays: extraction.estimatedTimeDisplays,
-        stats: extraction.stats, entries: extraction.entries)
+        stats: extraction.stats, entries: entries)
       try store.saveScreenText(document, in: folder)
       let completed = try store.update(in: folder) {
         $0.screenText?.status = .complete
         $0.screenText?.completedAt = now()
         $0.screenText?.error = nil
         $0.screenText?.stats = extraction.stats
-        $0.screenText?.preview = Array(extraction.entries.flatMap(\.lines).prefix(3))
+        $0.screenText?.preview = Array(entries.flatMap(\.lines).prefix(3))
         $0.screenText?.deleteRequested = deleteVideos && !videos.isEmpty
       }
       guard completed.screenText?.deleteRequested == true else { return .complete }

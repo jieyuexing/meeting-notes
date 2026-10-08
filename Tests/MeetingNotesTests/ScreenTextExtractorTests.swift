@@ -79,14 +79,16 @@ private func fingerprint(_ value: UInt8, changed: Int = 0, to other: UInt8 = 0) 
   merger.add(displayID: 1, at: start + 50, offset: 50, lines: ["Editor", "func main()"])
   // Sharing only 1 of 3 lines (e.g. a window title) is not a repeat.
   merger.add(displayID: 1, at: start + 60, offset: 60, lines: ["Editor", "README.md", "# Title"])
-  let entries = merger.finish()
+  let entries = merger.finish(until: [1: start + 70])
   #expect(entries.count == 4)
-  #expect(entries[0].displayID == 1 && entries[0].startedAt == start + 10 && entries[0].endedAt == start + 30)
-  #expect(entries[0].startOffset == 10 && entries[0].endOffset == 30 && entries[0].keyframes == 3)
+  // Text stays on screen until the display's next different content (the
+  // blank keyframe at 40 s is not content), the last entry until `until`.
+  #expect(entries[0].displayID == 1 && entries[0].startedAt == start + 10 && entries[0].endedAt == start + 50)
+  #expect(entries[0].startOffset == 10 && entries[0].endOffset == 50 && entries[0].keyframes == 3)
   #expect(entries[0].lines == ["Inbox", "Message A", "Message B", "Message C", "Message D"])
-  #expect(entries[1].displayID == 2 && entries[1].keyframes == 1)
-  #expect(entries[2].lines == ["Editor", "func main()"] && entries[2].startOffset == 50)
-  #expect(entries[3].lines == ["Editor", "README.md", "# Title"])
+  #expect(entries[1].displayID == 2 && entries[1].keyframes == 1 && entries[1].endedAt == start + 25)
+  #expect(entries[2].lines == ["Editor", "func main()"] && entries[2].startOffset == 50 && entries[2].endOffset == 60)
+  #expect(entries[3].lines == ["Editor", "README.md", "# Title"] && entries[3].endedAt == start + 70)
   #expect(ScreenTextLayout.similarity(["a", "b", "c", "d"], ["a", "b", "c", "x", "y"]) == 0.75)
   // CJK/Latin spacing differences between frames are the same line.
   #expect(ScreenTextLayout.similarity(["019 行：log line 19 状态"], ["019行：log line 19状态"]) == 1)
@@ -149,6 +151,10 @@ private func writeFixtureVideo(_ url: URL, frames: [UInt8], firstSeconds: Int64 
   #expect(result.entries[0].startedAt == segmentStart + 2)
   #expect(result.entries[1].startedAt == segmentStart + 8)
   #expect(result.entries[1].startOffset == 8)
+  // A static page lasts until the next content, and the last one until the
+  // last decoded frame (9.5 s after the first frame).
+  #expect(result.entries[0].endedAt == segmentStart + 8)
+  #expect(result.entries[1].endedAt == segmentStart + 11.5)
   #expect(result.stats.characters == "WHITE 白 白い".count + "BLACK".count)
   #expect(result.estimatedTimeDisplays.isEmpty)
 }

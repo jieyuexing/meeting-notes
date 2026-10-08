@@ -165,3 +165,28 @@ private func segment(
   #expect(text.contains("screen-text.md"))
   #expect(FileManager.default.fileExists(atPath: folder.path))
 }
+
+@MainActor @Test func jobExtendsLastEntriesToSegmentEndForRangeSelection() async throws {
+  let root = TestTemporary.root.appending(path: UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = LifelogStore(root: root, calendar: utc)
+  var item = try store.createSegment(id: UUID(), startedAt: dayStart)
+  item.segment.screenRelativeFolder = "screen/2026-10-08/\(item.segment.id.uuidString.lowercased())"
+  item.segment.screenText = .pending
+  item.segment.endedAt = dayStart + 1_200
+  try store.save(item.segment, in: item.folder)
+  let outcome = await LifelogScreenTextJob.run(store: store, folder: item.folder, deleteVideos: true,
+    extract: { _, start in
+      // One static document shown from 60 s; its only keyframe is at 60 s.
+      let entries = [ScreenTextEntry(displayID: 1, startedAt: start + 60, endedAt: start + 60,
+        startOffset: 60, endOffset: 60, keyframes: 1, lines: ["Design doc v3"])]
+      var stats = ScreenTextStats(); stats.entries = 1; stats.characters = 13
+      return ScreenTextExtraction(entries: entries, stats: stats, failures: [], estimatedTimeDisplays: [])
+    })
+  #expect(outcome == .complete)
+  let entry = try #require(store.screenTextDocument(in: item.folder)?.entries.first)
+  #expect(entry.endedAt == dayStart + 1_200 && entry.endOffset == 1_200)
+  // A selection in the middle of the static period still sees it.
+  let selection = try LifelogSelection.read(store: store, start: dayStart + 600, end: dayStart + 700, title: "")
+  #expect(selection.sources.first?.screenItems?.map(\.text) == ["Design doc v3"])
+}

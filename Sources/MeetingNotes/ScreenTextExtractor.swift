@@ -207,11 +207,27 @@ struct ScreenTextMerger {
       startOffset: offset, endOffset: offset, keyframes: 1, lines: lines), lines)
   }
 
-  mutating func finish() -> [ScreenTextEntry] {
-    let all = closed + open.values.map(\.entry)
+  /// Text stays on screen until that display's next entry starts; the last
+  /// entry of a display lasts until `until` (e.g. its last decoded frame), so
+  /// a static page with a single keyframe still covers the time it was shown.
+  mutating func finish(until: [UInt32: Date] = [:]) -> [ScreenTextEntry] {
+    var all = (closed + open.values.map(\.entry))
+      .sorted { ($0.startedAt, $0.displayID) < ($1.startedAt, $1.displayID) }
     open = [:]
     closed = []
-    return all.sorted { ($0.startedAt, $0.displayID) < ($1.startedAt, $1.displayID) }
+    var next = until
+    for index in all.indices.reversed() {
+      let display = all[index].displayID
+      if let end = next[display] { Self.extend(&all[index], to: end) }
+      next[display] = all[index].startedAt
+    }
+    return all
+  }
+
+  static func extend(_ entry: inout ScreenTextEntry, to end: Date) {
+    guard end > entry.endedAt else { return }
+    entry.endOffset += end.timeIntervalSince(entry.endedAt)
+    entry.endedAt = end
   }
 }
 
@@ -265,6 +281,7 @@ enum ScreenTextExtractor {
     var failures: [String] = []
     var estimated: [UInt32] = []
     var merger = ScreenTextMerger(similarity: configuration.mergeSimilarity)
+    var lastFrames: [UInt32: Date] = [:]
     for video in videos.sorted(by: { $0.displayID < $1.displayID }) {
       stats.displays += 1
       if video.firstFrameAt == nil { estimated.append(video.displayID) }
@@ -291,6 +308,7 @@ enum ScreenTextExtractor {
         guard seconds.isFinite else { continue }
         let first = firstSeconds ?? seconds
         firstSeconds = first
+        lastFrames[video.displayID] = ScreenTextTiming.absolute(frameSeconds: seconds, firstFrameSeconds: first, firstFrameAt: firstFrameAt)
         guard selector.wantsSample(at: seconds - first) else { continue }
         stats.sampledFrames += 1
         guard let fingerprint = ScreenFingerprint.make(pixels, columns: configuration.gridColumns, rows: configuration.gridRows),
@@ -312,7 +330,7 @@ enum ScreenTextExtractor {
       }
       if reader.status == .failed { throw reader.error ?? CocoaError(.fileReadCorruptFile) }
     }
-    let entries = merger.finish()
+    let entries = merger.finish(until: lastFrames)
     stats.entries = entries.count
     stats.characters = entries.map(\.characterCount).reduce(0, +)
     stats.processingSeconds = elapsed(started.duration(to: clock.now))
