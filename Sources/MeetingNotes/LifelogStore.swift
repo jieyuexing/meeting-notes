@@ -36,6 +36,10 @@ struct LifelogSegment: Codable, Equatable, Sendable {
   /// Independent screen directory; never subject to audio retention/silence deletion.
   var screenRelativeFolder: String?
   var media: UnifiedCaptureMetadata?
+  /// Owned by the screen-text queue; audio-side saves keep the on-disk value.
+  var screenText: LifelogScreenTextState?
+  /// When the screen videos were deleted after their text was saved.
+  var screenDeletedAt: Date?
 }
 
 /// Per-day counters for segments that were never kept.
@@ -48,6 +52,7 @@ struct LifelogDayStats: Codable, Equatable, Sendable {
 ///
 /// ```
 /// <root>/YYYY-MM-DD/HHmmss-<id8>/segment.json, transcript.md, microphone.wav (until transcribed)
+/// <root>/YYYY-MM-DD/HHmmss-<id8>/screen-text.json, screen-text.md   recognised screen text
 /// <root>/YYYY-MM-DD/day.json                    silent-segment counters
 /// <root>/digest/YYYY-MM-DD[.<label>].md / .json daily digest and its run record
 /// ```
@@ -144,7 +149,7 @@ struct LifelogStore: Sendable {
       try Data(transcriptMarkdown(updated, lines: lines).utf8).write(
         to: folder.appending(path: Self.transcriptFileName), options: .atomic)
     }
-    try save(updated, in: folder)
+    try saveKeepingScreen(updated, in: folder)
     if deleteAudio || lines.isEmpty {
       for audio in [audioURL(in: folder), systemAudioURL(in: folder)] {
       if FileManager.default.fileExists(atPath: audio.path) {
@@ -159,7 +164,7 @@ struct LifelogStore: Sendable {
     updated.status = .failed
     updated.transcriptionStartedAt = startedAt
     updated.error = error.localizedDescription
-    try save(updated, in: folder)
+    try saveKeepingScreen(updated, in: folder)
   }
 
   /// Conservative root-change gate: unreadable metadata cannot prove drainage.
@@ -172,6 +177,8 @@ struct LifelogStore: Sendable {
       for name in try FileManager.default.contentsOfDirectory(atPath: directory.path) where name != "day.json" {
         let segment = try load(folder: directory.appending(path: name))
         if [.recording, .pending, .failed].contains(segment.status) { return true }
+        if let screen = segment.screenText, screen.status != .complete
+          || (screen.deleteRequested == true && segment.screenDeletedAt == nil) { return true }
       }
     }
     return false
