@@ -181,3 +181,53 @@ MEETING_NOTES_TEST_COMMAND="<摘要命令>" MEETING_NOTES_TRANSLATION_INPUT=/abs
 第一个走生产 `SenseVoiceTranscriber`（缓存缺失时会像应用一样首次下载模型），输出各 turn 与段时间；第二个把报告里的逐字稿文本经真实命令后端翻译并写出 `transcript.zh.md`，只应喂合成或已授权文本。2026-10-08 结果见总仓 `.local/tmp/meeting-notes-sensevoice/RECORD.md`。
 
 普通 `swift test` 跳过真实 CLI 样例，覆盖 JSON 提取、设置默认值与读写、stdin 大输入、非零退出、超时、取消、生产解码及更新门禁。真实调用日志和执行结论在总仓 `.local/tmp/meeting-notes/RECORD.md`；长期维护合同以本文件为准。
+
+## MEET-4 常开模式（2026-10-08）
+
+**Settings → Always-on → Record continuously**，默认关闭。麦克风沿用 Microphone 面板的设备 UID/优先级；建议实验固定 USB 输入并确认它仍连接。此模式只采麦克风，不采系统音频，系统应用排除列表仍仅影响正式会议。
+默认根 `~/jieyuexing-universe/.state/opsail/lifelog`，与会议归档、Spool 的相同/父子路径（含可解析符号链接）互斥，文件系统根也拒绝。反向修改会议归档时同样校验。修改常开根先在旧根收好尾段与静音统计；旧根的已排队任务继续在原目录完成，不搬移历史。
+
+- 默认连续静音 180 秒或单段 1800 秒切段，可在该面板调整。分段用新增 `LifelogRecorder` 的 AVAudioEngine 麦克风 tap，在锁内交换 WAV 文件句柄；不改上游 `MicrophoneRecorder`/`SystemAudioRecorder`。正常切段不主动重启引擎，但音频回调、磁盘同步、系统调度/设备驱动可能造成丢帧，**未证明无缝，也没有可保证的间隙上限**。静音判断是既有能量阈值，不是说话人识别；低音量或远场漏检仍须实验核实。高采样率的小缓冲先累积到 100ms 再交能量监测，关闭文件前再检查 WAV 信号，避免回调尾部被当作空段。
+- `LifelogController` 独立拥有录音和串行待转写队列；正式会议开始前收尾并释放麦克风，会议录音停止（含启动失败）后恢复。会议暂停期间仍让出，等待会议结束。交接有启动/授权/调度耗时，无硬上界。睡眠收尾，唤醒另开；录音持有现有 `RecordingWakeLock`。设备变更在 2 秒后重试，启动失败每 30 秒重试；不能保证断开期间有音频，也不补造该时段。
+- 正常退出由 `NSApplication.willTerminateNotification` 同步关闭尾段并落 `pending`，不等 ASR；下次启动恢复。强退/崩溃后 `recording` 段按文件字节修复 WAV header 并重试，未持久化到磁盘的音频无法保证。关闭开关收尾后仍处理已排队段；启用设置保留则应用下次启动自动录音。
+- 最终转写沿用 `FinalTranscriptionEngine.process` 的跨进程目录锁、SenseVoice/Nemotron 与取消处理。常开调用增加 `onDeviceOnly: true`：即使等待锁时引擎切为 OpenAI，也在锁内拒绝上传；音频留待恢复本地引擎。会议调用默认参数不变。常开建议 SenseVoice，但不替用户改设置；缺失模型仍可能按既有逻辑下载模型或回退 Nemotron。
+- **不调用 MeetingStore**，不产生会议标题、实时预览、逐段摘要、对照翻译、Codex 线程、Tana、rsync、HTTP/Shell hook；只做本地语言判定。常开启用期间不弹新的会议检测通知；正式会议自己的检测/自动停止继续工作。每日摘要的 Codex/command 是用户单独配置的外发边界，会议摘要设置不会自动继承到常开。
+- 全静音段删除目录并增加同日 `day.json` 计数；有信号但无转写保留 `empty` 元数据，不写空逐字稿，删除音频。成功转写按既有 Storage 音频留存设置（默认删音频）；捕获写入错误/转写失败保留音频并标 `failed`。Always-on 的 **Retry failed transcripts (all days)** 手动重试。失败不自动无限重试；pending/recording 在下次启动恢复，队列无并行转写/无自动丢弃上限，积压会增加磁盘占用。采样分别记录 pending、recording、failed。
+
+目录合同（ISO8601 时间写在元数据内，日目录用本地日历）：
+
+```text
+<lifelog>/YYYY-MM-DD/HHmmss-<id8>/segment.json
+                                      transcript.md
+                                      microphone.wav   # 处理前或失败/选择留存
+<lifelog>/YYYY-MM-DD/day.json                            # 丢弃的静音计数
+<lifelog>/digest/YYYY-MM-DD[.<label>].md
+<lifelog>/digest/YYYY-MM-DD[.<label>].json                # 用时/规模/来源/失败
+```
+
+`segment.json` 包含 startedAt/endedAt、status、closeReason、audioSeconds、speechSeconds、characterCount、language、transcriptionStartedAt/transcribedAt、transcript。speechSeconds 是 ASR turn 范围合计的**估计**，不是精确人声活动时长；Nemotron 全段回退可包含静音。结束至 transcribedAt 的差包含排队延迟。逐字稿 Markdown 用当地钟表时间；日期按**段开始时间**归属。午夜后的第一个 1 秒循环请求切段，延迟 tick/跨界缓冲仍归起始日；不是在午夜逐采样切开。改变系统时区会影响日期归属，实验期间固定时区。
+
+### 每日汇总与命令行复跑
+
+默认 **Custom command + 空命令**，等价不汇总；Off 也不请求/不写摘要。可单独选择 Codex（应用内 ChatGPT 登录）或 Custom command（stdin 提示词和 JSON schema、stdout JSON）。分派复用 `TranscriptTranslationBackend`，与 `requestInsights` 同一套后端函数/模型设置；不会执行对照翻译逻辑。选本地命令时内容只送回环 LM Studio；选择 Codex/DeepSeek 对比会把当天文字外发，只有手动运行对比入口才发生。
+
+默认当地 23:55，对当天**已完成**段按顺序分块汇总再合并；每个原文块默认 ≤12000 字符，超长单行也拆开，续块重复段标签。提示词/schema 开销不计入此原文限额。归并至少每两份中间摘要合并，保证收敛；中间模型输出很长时合并输入可超过原文块限额，后端上下文不足会记失败而不截断原文。每个请求解码失败/调用错误重试一次。最终文件含概览、时间段、待办与约定、带时间/段文件链接的回看片段、完整段索引。
+
+23:55 后的新段及当时未完成的段，**次日待前一日无 pending/recording 后补汇总**；已覆盖相同段数不重跑。自动只检查今天/昨天；超过一天的停机/积压、失败段后来才重试、或自动尝试累计 3 次耗尽时，用 CLI 显式重跑对应日期。失败间隔至少 10 分钟；失败元数据更新，已成功的 Markdown 不删，因此失败时要看同名 `.json`，不能把旧 Markdown 当新结果。手动按钮可越过自动次数上限；失败不影响逐字稿。关闭录音开关不等于关闭每日摘要，需将 Digest backend 设 Off/清空命令。
+
+独立于运行中 app 的 opt-in 入口（无变量时普通测试跳过，不调用真实模型）：
+
+```sh
+MEETING_NOTES_LIFELOG_ROOT=/absolute/lifelog \
+MEETING_NOTES_LIFELOG_DIGEST_DATE=2026-10-08 \
+MEETING_NOTES_LIFELOG_LABEL=local \
+MEETING_NOTES_TEST_COMMAND=/absolute/summary-command \
+swift test --disable-automatic-resolution -Xswiftc -warnings-as-errors --filter lifelogDigestProbe
+```
+
+输出为 `digest/2026-10-08.local.md` 及同名 JSON，不覆盖默认摘要。先停止实验并等队列排空，再让三个后端读取同一天的稳定文字；不要并行重跑相同 label。标签用字母/数字/连字符；总仓包装器验证日期/标签。`Run.inputCharacters` 为所有实际请求提示词字符数（含归并/重试、不含命令包装 schema），不是原文字符数/token；LM Studio 包装器另记含 schema 的字符数及可取得的 token 用量。
+
+本次新增文件：`LifelogSettings.swift`、`LifelogRecorder.swift`、`LifelogStore.swift`、`LifelogController.swift`、`LifelogDigest.swift`、`LifelogSettingsView.swift`、`Tests/MeetingNotesTests/LifelogTests.swift`。
+本次改动的上游文件仅 **3 个**：`AppModel.swift`（初始化、会议交接、归档隔离/检测通知门禁）、`SettingsView.swift`（Always-on 入口）、`TranscriptionEngine.swift`（本地处理约束）；既有转写锁 fixture 增加 local-only 断言。同步上游时重点核对录音 start/stop 的 await 边界、willTerminate 通知、FinalTranscriptionEngine 锁内的引擎分派；不把新摘要/归档/翻译路径接到常开段。MEET-3 语言/翻译与锁保留。
+
+实验专用脚本和完整操作合同在总仓 `.local/tmp/lifelog-24h/RUNBOOK.md`（临时、可重建；尚未启动 24h 实验）。严格测试、红绿回归、克隆构建与本地合成模型验证记录见同目录 `RECORD.md`。这些证明代码/fixture/构建边界，**不代表 USB 实录、24h 持续运行、零间隙、中文准确率或真实每日汇总质量验收**。

@@ -30,3 +30,17 @@
   “转写语言与中外对照逐字稿”. Real-audio and real-backend checks use the opt-in
   `localSenseVoiceFinalProbe` / `liveTranscriptTranslationProbe` tests (variables in `FORK.md`);
   feed them only retained or synthetic material and write outputs under the root task `.local/tmp/`.
+- Always-on / MEET-4 capture, lifelog archive, daily digest or experiment tools:
+  run `swift test --disable-automatic-resolution -Xswiftc -warnings-as-errors` and
+  `PYTHONDONTWRITEBYTECODE=1 python3 Tests/test_transcription_lock.py`; contract:
+  `FORK.md` “MEET-4 常开模式”. `LifelogController` never enters MeetingStore,
+  remote sync, per-segment summaries or translation. Keep the final-engine local-only
+  guard inside the transcription lock. Tests use fake capture, never a real microphone.
+  Daily comparison explicitly uses `--filter lifelogDigestProbe` with the four variables
+  in FORK.md; do not invoke it on real data unless authorized.
+  Experiment operations: root `.local/tmp/lifelog-24h/bin/{sample.py,report.py,digest.sh}`
+  → root `.local/tmp/lifelog-24h/RUNBOOK.md`. No launchd load, recording, deployment,
+  app restart or defaults changes is implied by a test/build request. For build-only
+  verification use `scripts/build-app.sh` in a task-directory APFS clone (it deletes
+  the clone's app bundle), never against the running canonical app. Set TMPDIR/TMP/TEMP
+  to the root task `.local/tmp/lifelog-24h/tmp`; document platform test-runner temp overrides.
