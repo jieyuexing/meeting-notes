@@ -440,7 +440,7 @@ private func response(_ items: [(Int, String)]) -> Data {
   if let error = outcome.error { throw error }
   var translated = meeting
   translated.transcriptLanguage = outcome.language
-  translated.transcriptTranslation = try #require(outcome.translation)
+  translated.transcriptTranslation = outcome.translation
   let folder = URL(fileURLWithPath: outputPath, isDirectory: true)
   try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
   try TranscriptTranslationArtifact.persist(for: translated, in: folder) { data, url in
