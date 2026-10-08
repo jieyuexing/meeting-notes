@@ -89,9 +89,9 @@ struct ChatGPTActionButtonLabel: View {
       } else {
         OpenAIAppIcon(size: 15, color: isAlternate ? .accentColor : nil)
       }
-      Text(
+      Text(UIStrings.resolve(
         isLoading
-          ? "Opening…" : (isAlternate ? "New ChatGPT task" : "Discuss with ChatGPT"))
+          ? "Opening…" : (isAlternate ? "New ChatGPT task" : "Discuss with ChatGPT")))
     }
     .font(.caption.weight(.semibold))
     .padding(.horizontal, 9)

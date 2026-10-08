@@ -22,6 +22,15 @@ struct LifelogSettings: Equatable, Sendable {
   static let chunkRange: ClosedRange<Int> = 2_000...200_000
 
   var enabled = false
+  var enabledAt: Date?
+  /// New builds use one daily media entry. Existing enabled preference is read,
+  /// never rewritten by loading. Microphone-only remains an explicit option.
+  var unifiedMedia = true
+  var allDisplays = true
+  var screenCapacityGB = 10
+  var t3Enabled = true
+  var t3IncludeText = true
+  var t3ctlPath = "~/.local/bin/t3ctl"
   var rootPath = defaultRootPath
   /// Continuous quiet after speech that ends a segment.
   var silenceThreshold: TimeInterval = 180
@@ -91,6 +100,7 @@ enum LifelogSettingsStore {
 
   static func load(from defaults: UserDefaults = .standard) -> LifelogSettings {
     var settings = LifelogSettings()
+    settings.enabledAt = defaults.object(forKey: "lifelog.enabledAt") as? Date
     settings.enabled = defaults.bool(forKey: Key.enabled)
     if let path = defaults.string(forKey: Key.rootPath),
       !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -114,10 +124,23 @@ enum LifelogSettingsStore {
     if defaults.object(forKey: Key.chunk) != nil {
       settings.digestChunkCharacters = clamp(defaults.integer(forKey: Key.chunk), LifelogSettings.chunkRange)
     }
+    settings.unifiedMedia = defaults.object(forKey: "lifelog.unifiedMedia") as? Bool ?? true
+    settings.allDisplays = defaults.object(forKey: "lifelog.allDisplays") as? Bool ?? true
+    settings.screenCapacityGB = max(1, min(1000, defaults.object(forKey: "lifelog.screenCapacityGB") as? Int ?? 10))
+    settings.t3Enabled = defaults.object(forKey: "lifelog.t3Enabled") as? Bool ?? true
+    settings.t3IncludeText = defaults.object(forKey: "lifelog.t3IncludeText") as? Bool ?? true
+    settings.t3ctlPath = defaults.string(forKey: "lifelog.t3ctlPath") ?? "~/.local/bin/t3ctl"
     return settings
   }
 
   static func save(_ settings: LifelogSettings, to defaults: UserDefaults = .standard) {
+    defaults.set(settings.enabledAt, forKey: "lifelog.enabledAt")
+    defaults.set(settings.unifiedMedia, forKey: "lifelog.unifiedMedia")
+    defaults.set(settings.allDisplays, forKey: "lifelog.allDisplays")
+    defaults.set(settings.screenCapacityGB, forKey: "lifelog.screenCapacityGB")
+    defaults.set(settings.t3Enabled, forKey: "lifelog.t3Enabled")
+    defaults.set(settings.t3IncludeText, forKey: "lifelog.t3IncludeText")
+    defaults.set(settings.t3ctlPath, forKey: "lifelog.t3ctlPath")
     defaults.set(settings.enabled, forKey: Key.enabled)
     defaults.set(settings.rootPath, forKey: Key.rootPath)
     defaults.set(settings.silenceThreshold, forKey: Key.silence)

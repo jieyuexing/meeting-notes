@@ -643,9 +643,10 @@ actor FinalTranscriptionEngine {
     microphone: URL, system: URL, senseVoice useSenseVoice: Bool, strictMicrophone: Bool
   ) async throws -> [TranscriptTurn] {
     let mic = try await transcribeIfUsable(microphone, senseVoice: useSenseVoice, strict: strictMicrophone)
-    // Always-on owns one microphone WAV, with no system track. Every read in
-    // this path throws on failure; it never reuses the legacy lossy Bool guard.
-    let remote = strictMicrophone ? nil : try await transcribeIfUsable(system, senseVoice: useSenseVoice)
+    // Historical microphone-only records have no system file. Existing tracks
+    // use the same throwing check INSIDE the local-only transcription lock.
+    let remote = strictMicrophone && !FileManager.default.fileExists(atPath: system.path)
+      ? nil : try await transcribeIfUsable(system, senseVoice: useSenseVoice, strict: strictMicrophone)
     try Task.checkCancellation()
 
     guard mic != nil || remote != nil else { throw CocoaError(.fileReadCorruptFile) }

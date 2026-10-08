@@ -93,7 +93,7 @@ private final class FakeTranscriber: @unchecked Sendable {
 }
 
 private func temporaryRoot() -> URL {
-  let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appending(path: ".local/tmp/lifelog-24h/tmp")
+  let url = TestTemporary.root
     .appending(path: "lifelog-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
   try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
   return url
@@ -103,6 +103,59 @@ private var shanghai: Calendar {
   var calendar = Calendar(identifier: .gregorian)
   calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
   return calendar
+}
+
+@Test func uiLanguageDefaultsRoundTripsAndKeepsDocumentLanguageSeparate() {
+  let defaults = UserDefaults(suiteName: "ui-language-\(UUID().uuidString)")!
+  #expect(UILanguage.load(from: defaults) == .system)
+  UILanguage.save(.chineseSimplified, to: defaults)
+  #expect(UILanguage.load(from: defaults) == .chineseSimplified)
+  // The UI preference has its own key and cannot change the persisted
+  // generated-document language preference.
+  #expect(defaults.object(forKey: "meeting.notes.language") == nil)
+}
+
+@Test func chineseLocalizationContainsTimelineAndPrivacyStrings() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+  let chineseURL = root.appending(path: "Resources/zh-Hans.lproj/Localizable.strings")
+  let englishURL = root.appending(path: "Resources/en.lproj/Localizable.strings")
+  let data = try Data(contentsOf: chineseURL)
+  let strings = String(decoding: data, as: UTF8.self)
+  for key in ["Daily record", "Start recording", "Stop recording", "Transcribing", "App language"] {
+    #expect(strings.contains("\"\(key)\""))
+  }
+  let english = String(decoding: try Data(contentsOf: englishURL), as: UTF8.self)
+  // Explicit table checks do not depend on the test process's AppleLanguages.
+  #expect(strings.contains("\"Start recording\" = \"开始记录\";"))
+  #expect(english.contains("\"Start recording\" = \"Start recording\";"))
+  #expect(!strings.contains("\"__known_missing_key__\"")) // deliberate bad sample
+  #expect(strings.contains("\"%@ min\" = \"%@ 分钟\";"))
+}
+
+@Test func uiStringsUsesTheSelectedBundleLocalizationAndEnglishFallback() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+  let bundleURL = temporaryRoot().appending(path: "LocalizationFixture.bundle", directoryHint: .isDirectory)
+  let resources = bundleURL.appending(path: "Contents/Resources", directoryHint: .isDirectory)
+  try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+  let info: [String: Any] = [
+    "CFBundleIdentifier": "app.meetingnotes.localization-fixture",
+    "CFBundleName": "LocalizationFixture",
+    "CFBundlePackageType": "BNDL",
+  ]
+  (info as NSDictionary).write(to: bundleURL.appending(path: "Contents/Info.plist"), atomically: true)
+  for name in ["en.lproj", "zh-Hans.lproj"] {
+    try FileManager.default.copyItem(
+      at: root.appending(path: "Resources/\(name)"), to: resources.appending(path: name))
+  }
+  let bundle = try #require(Bundle(path: bundleURL.path))
+  #expect(UIStrings.string("Start recording", language: .chineseSimplified, bundle: bundle) == "开始记录")
+  #expect(UIStrings.string("Start recording", language: .english, bundle: bundle) == "Start recording")
+  // Deliberate bad sample: the exact production lookup returns its key only
+  // after selected-language and English fallback both miss it.
+  #expect(UIStrings.string("__known_missing_key__", language: .chineseSimplified, bundle: bundle) == "__known_missing_key__")
+  #expect(String(format: UIStrings.string("%@ min", language: .chineseSimplified, bundle: bundle), "12") == "12 分钟")
 }
 
 private func date(_ text: String) -> Date {

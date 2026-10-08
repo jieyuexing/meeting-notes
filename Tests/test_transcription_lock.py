@@ -59,6 +59,22 @@ class TranscriptionLockTests(unittest.TestCase):
         self.assertTrue(select.select([child.stdout], [], [], 5)[0], 'probe timeout')
         return child.stdout.readline().strip()
 
+    def test_unified_local_only_includes_system_track(self):
+        (self.root / 'system.wav').touch()
+        child = self.child(FIXTURE_LOCAL_ONLY='1')
+        self.assertEqual(self.line(child), 'entered')
+        self.assertEqual(self.line(child), 'entered')
+        self.assertEqual(self.line(child), 'done:2')
+        self.assertEqual(child.wait(timeout=5), 0)
+
+    def test_unified_system_read_failure_is_strict_and_retained(self):
+        (self.root / 'system.wav').touch()
+        child = self.child(FIXTURE_LOCAL_ONLY='1', FIXTURE_SYSTEM_READ_ERROR='1')
+        self.assertEqual(self.line(child), 'entered')
+        self.assertIn('Code=257', self.line(child))
+        self.assertEqual(child.wait(timeout=5), 1)
+        self.assertTrue((self.root / 'system.wav').exists())
+
     def test_local_only_refuses_cloud_even_inside_shared_entry(self):
         child = self.child(FIXTURE_OPENAI='1', FIXTURE_LOCAL_ONLY='1')
         line = self.line(child)

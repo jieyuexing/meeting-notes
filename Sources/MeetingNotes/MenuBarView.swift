@@ -37,14 +37,10 @@ struct MenuBarView: View {
   @Bindable var model: AppModel
   @Environment(\.openSettings) private var openSettings
   @Environment(\.openWindow) private var openWindow
+  @State private var showLegacy = false
+  @State private var showSelection = false
   @State private var optionKey = OptionKeyMonitor()
 
-  private static let todayTimeFormatter: DateFormatter = {
-    let formatter = DateFormatter()
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.dateFormat = "HH:mm"
-    return formatter
-  }()
 
   var body: some View {
     ZStack {
@@ -56,10 +52,10 @@ struct MenuBarView: View {
             meetingDetectionPanel(app: app)
           }
 
-          meetingField
+          if showLegacy || model.state != .idle { meetingField }
 
           if model.state == .paused {
-            Label("Recording stays paused until you resume", systemImage: "pause.circle.fill")
+            Label(UIStrings.text("Recording stays paused until you resume"), systemImage: "pause.circle.fill")
               .font(.caption.weight(.medium))
               .foregroundStyle(.orange)
           }
@@ -68,11 +64,17 @@ struct MenuBarView: View {
             transcriptPreview
           }
 
-          if model.state != .recording && model.state != .paused {
-            todayOverview
-          }
+          // Daily capture remains visible while a formal meeting is being
+          // recorded, so users never have to decide the category in advance.
+          dailyCaptureControl
+
+          if model.state != .recording && model.state != .paused { todayOverview }
 
           recoveryActions
+          if model.state == .idle {
+            Button(UIStrings.text("Separate meeting (advanced)")) { showLegacy.toggle() }
+              .font(.caption)
+          }
           primaryActions
           statusLine
         }
@@ -87,7 +89,11 @@ struct MenuBarView: View {
           .zIndex(1)
       }
     }
-    .frame(width: 390)
+    .sheet(isPresented: $showSelection) {
+      RecordingSelectionView(lifelog: model.lifelog, day: model.selectedMeetingDate)
+        .environment(\.locale, model.uiLanguage.locale)
+    }
+    .frame(width: 430)
     .background(.ultraThinMaterial)
     .animation(.easeOut(duration: 0.16), value: model.meetingPendingDeletion?.id)
     .onExitCommand(perform: model.cancelMeetingDeletion)
@@ -110,7 +116,7 @@ struct MenuBarView: View {
             .background(Color.red.opacity(0.10), in: Circle())
 
           VStack(alignment: .leading, spacing: 3) {
-            Text("Delete meeting?")
+            Text(UIStrings.text("Delete meeting?"))
               .font(.headline.weight(.semibold))
             Text(meeting.title)
               .font(.subheadline)
@@ -119,17 +125,17 @@ struct MenuBarView: View {
           }
         }
 
-        Text("Remove this meeting from this Mac and the synced archive? This can’t be undone.")
+        Text(UIStrings.text("Remove this meeting from this Mac and the synced archive? This can’t be undone."))
           .font(.caption)
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
 
         HStack(spacing: 8) {
           Spacer()
-          Button("Cancel", action: model.cancelMeetingDeletion)
+          Button(UIStrings.text("Cancel"), action: model.cancelMeetingDeletion)
             .buttonStyle(.bordered)
             .keyboardShortcut(.defaultAction)
-          Button("Delete", role: .destructive, action: model.confirmMeetingDeletion)
+          Button(UIStrings.text("Delete"), role: .destructive, action: model.confirmMeetingDeletion)
             .buttonStyle(.borderedProminent)
             .tint(.red)
         }
@@ -156,18 +162,18 @@ struct MenuBarView: View {
         .foregroundStyle(.tint)
         .frame(width: 24)
       VStack(alignment: .leading, spacing: 2) {
-        Text("\(app) meeting detected")
+        Text(UIStrings.text("\(app) meeting detected"))
           .font(.caption.weight(.semibold))
-        Text("Camera and microphone are active.")
+        Text(UIStrings.text("Camera and microphone are active."))
           .font(.caption2)
           .foregroundStyle(.secondary)
       }
       Spacer(minLength: 6)
-      Button("Not now", action: model.dismissDetectedMeeting)
+      Button(UIStrings.text("Not now"), action: model.dismissDetectedMeeting)
         .buttonStyle(.plain)
         .font(.caption)
         .foregroundStyle(.secondary)
-      Button("Record", action: model.recordDetectedMeeting)
+      Button(UIStrings.text("Record"), action: model.recordDetectedMeeting)
         .buttonStyle(.borderedProminent)
         .controlSize(.small)
     }
@@ -183,7 +189,7 @@ struct MenuBarView: View {
         .frame(width: 26)
 
       VStack(alignment: .leading, spacing: 1) {
-        Text("Meeting Notes")
+        Text(UIStrings.text("Meeting Notes"))
           .font(.headline.weight(.semibold))
         Text(model.archiveSubtitle)
           .font(.caption)
@@ -197,7 +203,7 @@ struct MenuBarView: View {
         Circle()
           .fill(stateColor)
           .frame(width: 7, height: 7)
-        Text(stateLabel)
+        Text(UIStrings.resolve(stateLabel))
           .font(.caption.weight(.medium))
       }
       .padding(.horizontal, 10)
@@ -211,7 +217,7 @@ struct MenuBarView: View {
   private var meetingField: some View {
     VStack(alignment: .leading, spacing: 7) {
       HStack {
-        Text("MEETING")
+        Text(UIStrings.text("MEETING"))
           .font(.caption2.weight(.semibold))
           .tracking(0.8)
           .foregroundStyle(.secondary)
@@ -226,16 +232,16 @@ struct MenuBarView: View {
           }
           .buttonStyle(.plain)
           .disabled(model.codexLaunchingCurrentMeeting)
-          .help(
+          .help(UIStrings.resolve(
             optionKey.isPressed
               ? "Start a new ChatGPT task for this meeting"
-              : "Discuss this meeting with ChatGPT (hold Option for a new task)")
+              : "Discuss this meeting with ChatGPT (hold Option for a new task)"))
         }
       }
       HStack(spacing: 10) {
         Image(systemName: "text.cursor")
           .foregroundStyle(.secondary)
-        TextField("Meeting title", text: $model.title)
+        TextField(UIStrings.text("Meeting title"), text: $model.title)
           .textFieldStyle(.plain)
           .font(.body.weight(.semibold))
           .onSubmit { model.updateTitle() }
@@ -256,29 +262,53 @@ struct MenuBarView: View {
     }
   }
 
+  private var dailyCaptureControl: some View {
+    HStack(spacing: 10) {
+      Image(systemName: "waveform")
+        .foregroundStyle(model.lifelog.phase == .recording ? .red : .secondary)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(UIStrings.text("Daily record"))
+          .font(.caption.weight(.semibold))
+        Text(UIStrings.resolve(model.lifelog.statusText(language: model.uiLanguage)))
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+      }
+      Spacer()
+      Button(UIStrings.resolve(model.lifelog.settings.enabled ? "Stop recording" : "Start recording")) {
+        Task { await model.lifelog.setEnabled(!model.lifelog.settings.enabled) }
+      }
+      .buttonStyle(.bordered)
+      .controlSize(.small)
+    }
+    .padding(10)
+    .background(Color.accentColor.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+    .accessibilityElement(children: .combine)
+  }
+
   private var transcriptPreview: some View {
     VStack(alignment: .leading, spacing: 0) {
       HStack {
-        Label("Live transcript", systemImage: "text.alignleft")
+        Label(UIStrings.text("Live transcript"), systemImage: "text.alignleft")
           .font(.caption.weight(.semibold))
         Spacer()
         if model.canSwitchLivePreview {
           HStack(spacing: 6) {
-            Button("LOCAL") { model.setLivePreviewOpenAI(false) }
+            Button(UIStrings.text("LOCAL")) { model.setLivePreviewOpenAI(false) }
               .buttonStyle(.plain)
               .font(.system(size: 9, weight: .bold))
               .tracking(0.6)
               .foregroundStyle(model.liveUsingOpenAI ? .tertiary : .secondary)
-              .help("Transcribe the live preview on this Mac")
-            Button("OPENAI") { model.setLivePreviewOpenAI(true) }
+              .help(UIStrings.text("Transcribe the live preview on this Mac"))
+            Button(UIStrings.text("OPENAI")) { model.setLivePreviewOpenAI(true) }
               .buttonStyle(.plain)
               .font(.system(size: 9, weight: .bold))
               .tracking(0.6)
               .foregroundStyle(model.liveUsingOpenAI ? .secondary : .tertiary)
-              .help("Transcribe the live preview with the OpenAI API")
+              .help(UIStrings.text("Transcribe the live preview with the OpenAI API"))
           }
         } else {
-          Text(model.liveUsingOpenAI ? "OPENAI" : "LOCAL")
+          Text(UIStrings.resolve(model.liveUsingOpenAI ? "OPENAI" : "LOCAL"))
             .font(.system(size: 9, weight: .bold))
             .tracking(0.6)
             .foregroundStyle(.secondary)
@@ -326,7 +356,7 @@ struct MenuBarView: View {
 
         Spacer()
 
-        Text("\(model.displayedMeetings.count) meeting\(model.displayedMeetings.count == 1 ? "" : "s")")
+        Text(UIStrings.format("Meetings: %d · recordings: %d", language: model.uiLanguage, model.displayedMeetings.count, model.displayedLifelogSegments.count))
           .font(.caption2)
           .foregroundStyle(.secondary)
 
@@ -341,28 +371,28 @@ struct MenuBarView: View {
 
       Divider().padding(.horizontal, 10)
 
-      if model.displayedMeetings.isEmpty {
+      if model.displayedMeetings.isEmpty && model.displayedLifelogSegments.isEmpty && model.lifelog.t3Snapshot.messages.isEmpty && model.lifelog.t3Snapshot.runs.isEmpty {
         VStack(spacing: 5) {
           Image(systemName: "calendar.badge.clock")
             .font(.system(size: 16, weight: .regular))
             .foregroundStyle(.tertiary)
-          Text(model.canShowNextMeetingDay ? "No completed meetings on this day." : "Completed meetings will appear here.")
+          Text(UIStrings.resolve(model.canShowNextMeetingDay ? "No completed meetings on this day." : "Completed meetings will appear here."))
             .font(.caption)
             .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 13)
-      } else if model.displayedMeetings.count > 4 {
+      } else if model.displayedMeetings.count + model.displayedLifelogSegments.count > 4 {
         // Keep the popover usable for long days: show every meeting inside a
         // capped scroll area instead of truncating the list.
         ScrollView {
           VStack(spacing: 0) {
-            meetingRows
+            timelineRows
           }
         }
         .frame(height: 264)
       } else {
-        meetingRows
+        timelineRows
       }
     }
     .background(cardFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -372,6 +402,30 @@ struct MenuBarView: View {
     }
   }
 
+  @ViewBuilder private var timelineRows: some View {
+    if !model.displayedMeetings.isEmpty {
+      timelineSectionTitle(UIStrings.text("Meetings"))
+      meetingRows
+    }
+    DailyEvidenceTimeline(lifelog: model.lifelog, segments: model.displayedLifelogSegments, day: model.selectedMeetingDate)
+    HStack {
+      Button(UIStrings.text("Select time range / meeting notes")) { showSelection = true }
+      Spacer()
+      Button(UIStrings.text("All records…")) {
+        NSWorkspace.shared.open(model.lifelog.store.root.appending(path: model.lifelog.store.dayKey(model.selectedMeetingDate)))
+      }
+    }.font(.caption).padding(10)
+  }
+
+  private func timelineSectionTitle(_ title: String) -> some View {
+    Text(title)
+      .font(.caption2.weight(.semibold))
+      .foregroundStyle(.secondary)
+      .padding(.horizontal, 11)
+      .padding(.top, 8)
+      .padding(.bottom, 3)
+  }
+
   private var meetingRows: some View {
     ForEach(Array(model.displayedMeetings.enumerated()), id: \.element.id) {
       index, meeting in
@@ -379,7 +433,7 @@ struct MenuBarView: View {
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: 10) {
               HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text(Self.todayTimeFormatter.string(from: meeting.startedAt))
+                Text(meeting.startedAt.formatted(.dateTime.hour().minute().locale(model.uiLanguage.locale)))
                   .font(.system(.caption2, design: .monospaced))
                   .foregroundStyle(.tertiary)
                   .monospacedDigit()
@@ -390,7 +444,7 @@ struct MenuBarView: View {
                       .font(.caption.weight(.semibold))
                       .lineLimit(1)
                   }
-                  Text(meeting.summary ?? durationText(for: meeting))
+                  Text(meeting.summary ?? UIStrings.resolve(durationText(for: meeting)))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -410,40 +464,40 @@ struct MenuBarView: View {
                 !model.canReadMeetings || model.codexLaunchingMeetingID != nil
                   || model.isMeetingFinalizing(meeting) || model.isMeetingRecoverable(meeting)
               )
-              .help(
+              .help(UIStrings.resolve(
                 optionKey.isPressed
                   ? "Start a new ChatGPT task for this meeting"
-                  : "Discuss with ChatGPT (hold Option for a new task)")
+                  : "Discuss with ChatGPT (hold Option for a new task)"))
               Menu {
                 if model.isMeetingFinalizing(meeting) {
-                  Button("Finalizing…", systemImage: "waveform") {}
+                  Button(UIStrings.text("Finalizing…"), systemImage: "waveform") {}
                     .disabled(true)
                   Divider()
                   Button(role: .destructive) {
                     model.requestMeetingDeletion(meeting)
                   } label: {
-                    Label("Delete meeting…", systemImage: "trash")
+                    Label(UIStrings.text("Delete meeting…"), systemImage: "trash")
                   }
                   .disabled(!model.canManageMeetings)
                 } else if model.isMeetingRecoverable(meeting) {
                   Button {
                     model.recoverMeeting(meeting)
                   } label: {
-                    Label("Retry finalization", systemImage: "arrow.counterclockwise")
+                    Label(UIStrings.text("Retry finalization"), systemImage: "arrow.counterclockwise")
                   }
                   .disabled(!model.canManageMeetings)
                   Divider()
                   Button(role: .destructive) {
                     model.requestMeetingDeletion(meeting)
                   } label: {
-                    Label("Delete meeting…", systemImage: "trash")
+                    Label(UIStrings.text("Delete meeting…"), systemImage: "trash")
                   }
                   .disabled(!model.canManageMeetings)
                 } else {
                   Button {
                     model.requestMeetingRename(meeting)
                   } label: {
-                    Label("Rename…", systemImage: "pencil")
+                    Label(UIStrings.text("Rename…"), systemImage: "pencil")
                   }
                   .disabled(!model.canManageMeetings)
                   Divider()
@@ -451,20 +505,20 @@ struct MenuBarView: View {
                     Button {
                       model.openMeetingSummary(meeting)
                     } label: {
-                      Label("Open summary", systemImage: "doc.text")
+                      Label(UIStrings.text("Open summary"), systemImage: "doc.text")
                     }
                   }
                   Button {
                     model.openMeetingTranscript(meeting)
                   } label: {
-                    Label("Open transcript", systemImage: "text.quote")
+                    Label(UIStrings.text("Open transcript"), systemImage: "text.quote")
                   }
                   Divider()
                   Button {
                     model.recreateMeetingNotes(meeting)
                   } label: {
                     Label(
-                      meeting.summary == nil ? "Create summary" : "Recreate summary",
+                      UIStrings.resolve(meeting.summary == nil ? "Create summary" : "Recreate summary"),
                       systemImage: meeting.summary == nil ? "sparkles" : "arrow.clockwise")
                   }
                   .disabled(!model.canManageMeetings)
@@ -472,7 +526,7 @@ struct MenuBarView: View {
                   Button(role: .destructive) {
                     model.requestMeetingDeletion(meeting)
                   } label: {
-                    Label("Delete meeting…", systemImage: "trash")
+                    Label(UIStrings.text("Delete meeting…"), systemImage: "trash")
                   }
                   .disabled(!model.canManageMeetings)
                 }
@@ -490,7 +544,7 @@ struct MenuBarView: View {
               // a stopped capture is processed; mutating items above disable
               // themselves individually.
               .disabled(!model.canReadMeetings)
-              .accessibilityLabel("More actions")
+              .accessibilityLabel(UIStrings.text("More actions"))
             }
             .padding(.horizontal, 11)
             .padding(.vertical, 8)
@@ -498,17 +552,17 @@ struct MenuBarView: View {
             if model.meetingPendingRename?.id == meeting.id {
               Divider().padding(.leading, 62)
               VStack(alignment: .leading, spacing: 8) {
-                Text("Rename meeting")
+                Text(UIStrings.text("Rename meeting"))
                   .font(.caption.weight(.semibold))
-                TextField("Meeting title", text: $model.meetingRenameDraft)
+                TextField(UIStrings.text("Meeting title"), text: $model.meetingRenameDraft)
                   .textFieldStyle(.roundedBorder)
                   .onSubmit(model.confirmMeetingRename)
                 HStack {
                   Spacer()
-                  Button("Cancel", action: model.cancelMeetingRename)
+                  Button(UIStrings.text("Cancel"), action: model.cancelMeetingRename)
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-                  Button("Rename", action: model.confirmMeetingRename)
+                  Button(UIStrings.text("Rename"), action: model.confirmMeetingRename)
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                     .disabled(!model.canConfirmMeetingRename)
@@ -542,7 +596,7 @@ struct MenuBarView: View {
     }
     .buttonStyle(.plain)
     .disabled(isDisabled)
-    .accessibilityLabel(accessibilityLabel)
+    .accessibilityLabel(model.ui(accessibilityLabel))
   }
 
   private func durationText(for meeting: TodayMeetingSummary) -> String {
@@ -557,11 +611,11 @@ struct MenuBarView: View {
     if model.recoverableMeetingAvailable || model.enrichmentRetryAvailable {
       HStack(spacing: 8) {
         if model.recoverableMeetingAvailable {
-          Button("Recover capture", systemImage: "arrow.counterclockwise", action: model.recoverLatestMeeting)
+          Button(UIStrings.text("Recover capture"), systemImage: "arrow.counterclockwise", action: model.recoverLatestMeeting)
             .disabled(!model.canManageMeetings)
         }
         if model.enrichmentRetryAvailable {
-          Button("Retry notes", systemImage: "sparkles", action: model.retryEnrichment)
+          Button(UIStrings.text("Retry notes"), systemImage: "sparkles", action: model.retryEnrichment)
             .disabled(!model.canManageMeetings)
         }
       }
@@ -575,7 +629,7 @@ struct MenuBarView: View {
       if model.state == .recording || model.state == .paused {
         Button(action: model.togglePause) {
           Label(
-            model.state == .paused ? "Resume" : "Pause",
+            UIStrings.resolve(model.state == .paused ? "Resume" : "Pause"),
             systemImage: model.state == .paused ? "play.fill" : "pause.fill")
             .frame(minWidth: 72)
         }
@@ -583,8 +637,9 @@ struct MenuBarView: View {
         .controlSize(.large)
       }
 
+      if showLegacy || model.state != .idle {
       Button(action: model.toggleRecording) {
-        Label(buttonTitle, systemImage: buttonIcon)
+        Label(UIStrings.resolve(buttonTitle), systemImage: buttonIcon)
           .font(.body.weight(.medium))
           .foregroundStyle(.white)
           .frame(maxWidth: .infinity)
@@ -600,22 +655,24 @@ struct MenuBarView: View {
       .opacity(model.state == .starting || model.state == .processing ? 0.55 : 1)
       .disabled(model.state == .starting || model.state == .processing)
 
+      }
+      Spacer()
       Menu {
         Button {
           NSApp.activate(ignoringOtherApps: true)
           openSettings()
         } label: {
-          Label("Settings…", systemImage: "gearshape")
+          Label(UIStrings.text("Settings…"), systemImage: "gearshape")
         }
         Button {
           (NSApp.delegate as? AppDelegate)?.checkForUpdates()
         } label: {
-          Label("Check for Updates…", systemImage: "arrow.triangle.2.circlepath")
+          Label(UIStrings.text("Check for Updates…"), systemImage: "arrow.triangle.2.circlepath")
         }
         Divider()
-        Button("Quit Meeting Notes", systemImage: "power") { NSApplication.shared.terminate(nil) }
+        Button(UIStrings.text("Quit Meeting Notes"), systemImage: "power") { NSApplication.shared.terminate(nil) }
         Divider()
-        Text("Version \(Self.appVersion)")
+        Text(UIStrings.text("Version \(Self.appVersion)"))
       } label: {
         ZStack {
           RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -632,7 +689,7 @@ struct MenuBarView: View {
       .menuIndicator(.hidden)
       .menuStyle(.borderlessButton)
       .fixedSize()
-      .accessibilityLabel("More actions")
+      .accessibilityLabel(UIStrings.text("More actions"))
     }
   }
 
@@ -642,7 +699,7 @@ struct MenuBarView: View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
           Image(systemName: statusIcon)
             .font(.caption2)
-          Text(model.statusText)
+          Text(UIStrings.resolve(model.statusText))
             .font(.caption)
             .textSelection(.enabled)
             .lineLimit(2)
@@ -694,7 +751,8 @@ struct MenuBarView: View {
 
   private var stateLabel: String {
     switch model.state {
-    case .idle: return "Ready"
+    case .idle:
+      return model.lifelog.phase == .recording ? model.ui("Daily recording") : model.ui("Ready")
     case .starting: return "Starting"
     case .recording: return "Recording"
     case .paused: return "Paused"

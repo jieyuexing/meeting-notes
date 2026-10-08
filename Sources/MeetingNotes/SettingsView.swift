@@ -13,7 +13,7 @@ struct SettingsView: View {
           sidebarLabel(for: pane)
             .tag(pane)
         }
-        Section("Integrations") {
+        Section(UIStrings.text("Integrations")) {
           ForEach(SettingsPane.integrationPanes) { pane in
             sidebarLabel(for: pane)
               .tag(pane)
@@ -77,9 +77,9 @@ private struct OpenAISidebarLabel: View {
   var body: some View {
     Label {
       if isHighlighted {
-        Text(title)
+        Text(UIStrings.resolve(title))
       } else {
-        Text(title)
+        Text(UIStrings.resolve(title))
           .font(.body.weight(.regular))
       }
     } icon: {
@@ -155,16 +155,16 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
 
   var title: String {
     switch self {
-    case .general: "General"
-    case .storage: "Storage"
-    case .hooks: "Hooks"
-    case .transcriptions: "Transcriptions"
-    case .microphone: "Microphone"
+    case .general: UIStrings.text("General")
+    case .storage: UIStrings.text("Storage")
+    case .hooks: UIStrings.text("Hooks")
+    case .transcriptions: UIStrings.text("Transcriptions")
+    case .microphone: UIStrings.text("Microphone")
     case .tana: "Tana"
-    case .openAI: "Credentials"
+    case .openAI: UIStrings.text("Credentials")
     case .codex: "ChatGPT"
-    case .summaries: "Summaries"
-    case .lifelog: "Always-on"
+    case .summaries: UIStrings.text("Summaries")
+    case .lifelog: UIStrings.text("Always-on")
     }
   }
 
@@ -192,9 +192,9 @@ private struct SettingsPaneHeader: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 5) {
-      Text(title)
+      Text(UIStrings.resolve(title))
         .font(.title2.weight(.semibold))
-      Text(subtitle)
+      Text(UIStrings.resolve(subtitle))
         .font(.callout)
         .foregroundStyle(.secondary)
     }
@@ -214,7 +214,7 @@ private struct GeneralSettingsPane: View {
 
         Divider()
 
-        Text("ChatGPT")
+        Text(UIStrings.text("ChatGPT"))
           .font(.headline)
 
         HStack(spacing: 16) {
@@ -222,20 +222,20 @@ private struct GeneralSettingsPane: View {
             HStack(spacing: 6) {
               Image(systemName: model.chatGPTAuthenticated ? "checkmark.circle.fill" : "person.crop.circle")
                 .foregroundStyle(model.chatGPTAuthenticated ? .green : .secondary)
-              Text(model.chatGPTAuthenticated ? "Connected" : "Not connected")
+              Text(UIStrings.resolve(model.chatGPTAuthenticated ? "Connected" : "Not connected"))
                 .font(.body.weight(.medium))
             }
-            Text(model.chatGPTAuthStatusText)
+            Text(UIStrings.resolve(model.chatGPTAuthStatusText))
               .font(.caption)
               .foregroundStyle(.secondary)
               .fixedSize(horizontal: false, vertical: true)
           }
           Spacer()
           if model.chatGPTAuthenticated {
-            Button("Sign out", action: model.signOutOfChatGPT)
+            Button(UIStrings.text("Sign out"), action: model.signOutOfChatGPT)
               .disabled(model.chatGPTAuthInProgress)
           } else {
-            Button("Sign in with ChatGPT", action: model.signInToChatGPT)
+            Button(UIStrings.text("Sign in with ChatGPT"), action: model.signInToChatGPT)
               .buttonStyle(.borderedProminent)
               .disabled(model.chatGPTAuthInProgress)
           }
@@ -245,15 +245,38 @@ private struct GeneralSettingsPane: View {
 
         HStack(spacing: 16) {
           VStack(alignment: .leading, spacing: 4) {
-            Text("Detect video meetings")
+            Text(UIStrings.text("App language"))
               .font(.body.weight(.medium))
-            Text("Offer to record when the camera and microphone activate in Zoom, Chrome, Teams, FaceTime, Slack, or WhatsApp.")
+            Text(UIStrings.text("Changes the app interface only. Meeting notes and transcripts keep their own language settings."))
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+          Spacer()
+          Picker(UIStrings.text("App language"), selection: Binding(
+            get: { model.uiLanguage }, set: { model.setUILanguage($0) }
+          )) {
+            ForEach(UILanguage.allCases) { language in
+              Text(language.label()).tag(language)
+            }
+          }
+          .labelsHidden()
+          .pickerStyle(.menu)
+          .fixedSize()
+        }
+
+        Divider()
+
+        HStack(spacing: 16) {
+          VStack(alignment: .leading, spacing: 4) {
+            Text(UIStrings.text("Detect video meetings"))
+              .font(.body.weight(.medium))
+            Text(UIStrings.text("Offer to record when the camera and microphone activate in Zoom, Chrome, Teams, FaceTime, Slack, or WhatsApp."))
               .font(.caption)
               .foregroundStyle(.secondary)
               .fixedSize(horizontal: false, vertical: true)
           }
           Spacer()
-          Toggle("Detect video meetings", isOn: Binding(
+          Toggle(UIStrings.text("Detect video meetings"), isOn: Binding(
             get: { model.meetingDetectionEnabled },
             set: { model.setMeetingDetectionEnabled($0) }
           ))
@@ -264,9 +287,9 @@ private struct GeneralSettingsPane: View {
         Divider()
 
         VStack(alignment: .leading, spacing: 4) {
-          Text("Ignore calendar events")
+          Text(UIStrings.text("Ignore calendar events"))
             .font(.body.weight(.medium))
-          Text("Meetings whose titles contain these words never suggest a recording.")
+          Text(UIStrings.text("Meetings whose titles contain these words never suggest a recording."))
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -283,7 +306,7 @@ private struct GeneralSettingsPane: View {
                     .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .help("Remove \(word)")
+                .help(UIStrings.text("Remove \(word)"))
               }
               .padding(.horizontal, 10)
               .padding(.vertical, 5)
@@ -294,7 +317,7 @@ private struct GeneralSettingsPane: View {
           .padding(.top, 4)
 
           HStack(spacing: 4) {
-            TextField("Add word", text: $model.ignoredMeetingTitleDraft)
+            TextField(UIStrings.text("Add word"), text: $model.ignoredMeetingTitleDraft)
               .textFieldStyle(.roundedBorder)
               .frame(width: 140)
               .onSubmit { model.addIgnoredMeetingTitle() }
@@ -305,7 +328,7 @@ private struct GeneralSettingsPane: View {
             }
             .disabled(
               model.ignoredMeetingTitleDraft.trimmingCharacters(in: .whitespaces).isEmpty)
-            .help("Add word")
+            .help(UIStrings.text("Add word"))
           }
           .padding(.top, 4)
         }
@@ -314,20 +337,20 @@ private struct GeneralSettingsPane: View {
 
         HStack(spacing: 16) {
           VStack(alignment: .leading, spacing: 4) {
-            Text("Update channel")
+            Text(UIStrings.text("Update channel"))
               .font(.body.weight(.medium))
-            Text(model.updateChannel.explanation)
+            Text(UIStrings.resolve(model.updateChannel.explanation))
               .font(.caption)
               .foregroundStyle(.secondary)
               .fixedSize(horizontal: false, vertical: true)
           }
           Spacer()
-          Picker("Update channel", selection: Binding(
+          Picker(UIStrings.text("Update channel"), selection: Binding(
             get: { model.updateChannel },
             set: { model.setUpdateChannel($0) }
           )) {
             ForEach(UpdateChannel.allCases) { channel in
-              Text(channel.label).tag(channel)
+              Text(UIStrings.resolve(channel.label)).tag(channel)
             }
           }
           .labelsHidden()
@@ -336,7 +359,7 @@ private struct GeneralSettingsPane: View {
         }
 
         Label(
-          "Beta builds are signed the same way, but they are tested less. Switching back to stable keeps the beta you already installed until the next stable release replaces it.",
+          UIStrings.text("Beta builds are signed the same way, but they are tested less. Switching back to stable keeps the beta you already installed until the next stable release replaces it."),
           systemImage: "flask"
         )
         .font(.caption)
@@ -364,15 +387,15 @@ private struct CodexSettingsPane: View {
 
         HStack(spacing: 16) {
           VStack(alignment: .leading, spacing: 4) {
-            Text("Create threads automatically")
+            Text(UIStrings.text("Create threads automatically"))
               .font(.body.weight(.medium))
-            Text("Start a thread in the background whenever a recording begins.")
+            Text(UIStrings.text("Start a thread in the background whenever a recording begins."))
               .font(.caption)
               .foregroundStyle(.secondary)
               .fixedSize(horizontal: false, vertical: true)
           }
           Spacer()
-          Toggle("Create threads automatically", isOn: Binding(
+          Toggle(UIStrings.text("Create threads automatically"), isOn: Binding(
             get: { model.codexAutoCreateThreads },
             set: { model.setCodexAutoCreateThreads($0) }
           ))
@@ -384,17 +407,17 @@ private struct CodexSettingsPane: View {
 
         VStack(alignment: .leading, spacing: 8) {
           HStack(spacing: 16) {
-            Text("Model for new threads")
+            Text(UIStrings.text("Model for new threads"))
               .font(.body.weight(.medium))
             Spacer()
             if model.codexModelsLoading {
               ProgressView().controlSize(.small)
             }
-            Picker("Model", selection: Binding(
+            Picker(UIStrings.text("Model"), selection: Binding(
               get: { model.codexModel },
               set: { model.setCodexModel($0) }
             )) {
-              Text("Default Model").tag("")
+              Text(UIStrings.text("Default Model")).tag("")
               ForEach(model.codexAvailableModels) { choice in
                 Text(choice.displayName).tag(choice.id)
               }
@@ -405,16 +428,16 @@ private struct CodexSettingsPane: View {
 
           if !model.codexReasoningEffortChoices.isEmpty {
             HStack(spacing: 16) {
-              Text("Reasoning")
+              Text(UIStrings.text("Reasoning"))
                 .font(.body.weight(.medium))
               Spacer()
-              Picker("Reasoning", selection: Binding(
+              Picker(UIStrings.text("Reasoning"), selection: Binding(
                 get: { model.codexReasoningEffort },
                 set: { model.setCodexReasoningEffort($0) }
               )) {
-                Text("Model default").tag("")
+                Text(UIStrings.text("Model default")).tag("")
                 ForEach(model.codexReasoningEffortChoices, id: \.self) { effort in
-                  Text(effort.capitalized).tag(effort)
+                  Text(UIStrings.resolve(effort.capitalized)).tag(effort)
                 }
               }
               .labelsHidden()
@@ -423,7 +446,7 @@ private struct CodexSettingsPane: View {
           }
 
           if !model.codexModelStatusText.isEmpty {
-            Text(model.codexModelStatusText)
+            Text(UIStrings.resolve(model.codexModelStatusText))
               .font(.caption)
               .foregroundStyle(.secondary)
           }
@@ -432,9 +455,9 @@ private struct CodexSettingsPane: View {
         Divider()
 
         VStack(alignment: .leading, spacing: 8) {
-          Text("Meeting thread prompt")
+          Text(UIStrings.text("Meeting thread prompt"))
             .font(.headline)
-          Text("Sent when a new thread is created for a meeting. Existing threads are not changed.")
+          Text(UIStrings.text("Sent when a new thread is created for a meeting. Existing threads are not changed."))
             .font(.caption)
             .foregroundStyle(.secondary)
 
@@ -449,19 +472,19 @@ private struct CodexSettingsPane: View {
               model.persistCodexPromptDraft()
             }
 
-          Text("Available placeholders: {{meeting_title}}, {{meeting_id}}, {{meeting_date}}, {{meeting_folder}}, {{project_folder}}")
+          Text(UIStrings.text("Available placeholders: {{meeting_title}}, {{meeting_id}}, {{meeting_date}}, {{meeting_folder}}, {{project_folder}}"))
             .font(.caption)
             .foregroundStyle(.secondary)
             .textSelection(.enabled)
 
           HStack {
             if !model.codexPromptStatusText.isEmpty {
-              Text(model.codexPromptStatusText)
+              Text(UIStrings.resolve(model.codexPromptStatusText))
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
             Spacer()
-            Button("Restore Default", action: model.restoreDefaultCodexPrompt)
+            Button(UIStrings.text("Restore Default"), action: model.restoreDefaultCodexPrompt)
           }
         }
 
@@ -470,15 +493,15 @@ private struct CodexSettingsPane: View {
         VStack(alignment: .leading, spacing: 12) {
           HStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
-              Text("Automatically send a message after the notes are ready")
+              Text(UIStrings.text("Automatically send a message after the notes are ready"))
                 .font(.body.weight(.medium))
-              Text("Sends your instruction to the meeting's thread and lets it do the work.")
+              Text(UIStrings.text("Sends your instruction to the meeting's thread and lets it do the work."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
-            Toggle("Automatically send a message after the notes are ready", isOn: Binding(
+            Toggle(UIStrings.text("Automatically send a message after the notes are ready"), isOn: Binding(
               get: { model.codexSummaryMessageEnabled },
               set: { model.setCodexSummaryMessageEnabled($0) }
             ))
@@ -501,7 +524,7 @@ private struct CodexSettingsPane: View {
                 }
 
               if model.codexSummaryMessageDraft.isEmpty {
-                Text(CodexThreadService.summaryMessagePlaceholder)
+                Text(UIStrings.resolve(CodexThreadService.summaryMessagePlaceholder))
                   .font(.system(.body, design: .monospaced))
                   .foregroundStyle(.tertiary)
                   .padding(.horizontal, 13)
@@ -510,13 +533,13 @@ private struct CodexSettingsPane: View {
               }
             }
 
-            Text("Leave empty to do nothing. The same placeholders are available: {{meeting_title}}, {{meeting_id}}, {{meeting_date}}, {{meeting_folder}}, {{project_folder}}.")
+            Text(UIStrings.text("Leave empty to do nothing. The same placeholders are available: {{meeting_title}}, {{meeting_id}}, {{meeting_date}}, {{meeting_folder}}, {{project_folder}}."))
               .font(.caption)
               .foregroundStyle(.secondary)
               .textSelection(.enabled)
 
             if !model.codexSummaryMessageStatusText.isEmpty {
-              Text(model.codexSummaryMessageStatusText)
+              Text(UIStrings.resolve(model.codexSummaryMessageStatusText))
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
@@ -546,17 +569,17 @@ private struct SummariesSettingsPane: View {
 
         VStack(alignment: .leading, spacing: 8) {
           HStack(spacing: 16) {
-            Text("Model")
+            Text(UIStrings.text("Model"))
               .font(.body.weight(.medium))
             Spacer()
             if model.codexModelsLoading {
               ProgressView().controlSize(.small)
             }
-            Picker("Model", selection: Binding(
+            Picker(UIStrings.text("Model"), selection: Binding(
               get: { model.summaryModel },
               set: { model.setSummaryModel($0) }
             )) {
-              Text("Default Model").tag("")
+              Text(UIStrings.text("Default Model")).tag("")
               ForEach(model.codexAvailableModels) { choice in
                 Text(choice.displayName).tag(choice.id)
               }
@@ -567,16 +590,16 @@ private struct SummariesSettingsPane: View {
 
           if !model.summaryReasoningEffortChoices.isEmpty {
             HStack(spacing: 16) {
-              Text("Reasoning")
+              Text(UIStrings.text("Reasoning"))
                 .font(.body.weight(.medium))
               Spacer()
-              Picker("Reasoning", selection: Binding(
+              Picker(UIStrings.text("Reasoning"), selection: Binding(
                 get: { model.summaryReasoningEffort },
                 set: { model.setSummaryReasoningEffort($0) }
               )) {
-                Text("Model default").tag("")
+                Text(UIStrings.text("Model default")).tag("")
                 ForEach(model.summaryReasoningEffortChoices, id: \.self) { effort in
-                  Text(effort.capitalized).tag(effort)
+                  Text(UIStrings.resolve(effort.capitalized)).tag(effort)
                 }
               }
               .labelsHidden()
@@ -584,7 +607,7 @@ private struct SummariesSettingsPane: View {
             }
           }
 
-          Text("Used to write the summary and topics for each finished meeting. Default Model uses whichever model ChatGPT runs by default.")
+          Text(UIStrings.text("Used to write the summary and topics for each finished meeting. Default Model uses whichever model ChatGPT runs by default."))
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -594,19 +617,19 @@ private struct SummariesSettingsPane: View {
 
         HStack(spacing: 16) {
           VStack(alignment: .leading, spacing: 4) {
-            Text("Language")
+            Text(UIStrings.text("Language"))
               .font(.body.weight(.medium))
-            Text("The word-for-word transcript stays in its original language.")
+            Text(UIStrings.text("The word-for-word transcript stays in its original language."))
               .font(.caption)
               .foregroundStyle(.secondary)
           }
           Spacer()
-          Picker("Language", selection: Binding(
+          Picker(UIStrings.text("Language"), selection: Binding(
             get: { model.meetingNotesLanguage },
             set: { model.setMeetingNotesLanguage($0) }
           )) {
             ForEach(MeetingNotesLanguage.allCases) { language in
-              Text(language.label).tag(language)
+              Text(UIStrings.resolve(language.label)).tag(language)
             }
           }
           .labelsHidden()
@@ -617,9 +640,9 @@ private struct SummariesSettingsPane: View {
         Divider()
 
         VStack(alignment: .leading, spacing: 8) {
-          Text("Summary instructions")
+          Text(UIStrings.text("Summary instructions"))
             .font(.headline)
-          Text("Describes what the meeting notes should contain and how they should read. The structural rules — grounded in the transcript, no invented facts, neutral attribution — always apply.")
+          Text(UIStrings.text("Describes what the meeting notes should contain and how they should read. The structural rules — grounded in the transcript, no invented facts, neutral attribution — always apply."))
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -637,12 +660,12 @@ private struct SummariesSettingsPane: View {
 
           HStack {
             if !model.summaryGuidanceStatusText.isEmpty {
-              Text(model.summaryGuidanceStatusText)
+              Text(UIStrings.resolve(model.summaryGuidanceStatusText))
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
             Spacer()
-            Button("Restore Default", action: model.restoreDefaultSummaryGuidance)
+            Button(UIStrings.text("Restore Default"), action: model.restoreDefaultSummaryGuidance)
           }
         }
       }
@@ -666,34 +689,34 @@ private struct StorageSettingsPane: View {
 
         Divider()
 
-        Text("Local archive")
+        Text(UIStrings.text("Local archive"))
           .font(.headline)
 
         Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 14) {
           GridRow {
-            Text("Folder")
+            Text(UIStrings.text("Folder"))
               .gridColumnAlignment(.trailing)
             HStack(spacing: 8) {
               // The archive folder commits on Return or focus loss only: a
               // debounce would try to relocate meetings into half-typed paths.
-              TextField("Meeting Notes", text: $model.localArchivePathDraft)
+              TextField(UIStrings.text("Meeting Notes"), text: $model.localArchivePathDraft)
                 .focused($archivePathFieldFocused)
                 .onSubmit(model.commitLocalArchivePath)
-              Button("Choose…", action: model.chooseLocalArchiveDirectory)
+              Button(UIStrings.text("Choose…"), action: model.chooseLocalArchiveDirectory)
             }
           }
         }
         .controlSize(.large)
 
-        Text(model.keepAudioAfterProcessing
+        Text(UIStrings.resolve(model.keepAudioAfterProcessing
           ? "Finished notes and retained audio are saved here."
-          : "Finished notes are saved here. Audio is deleted after successful processing.")
+          : "Finished notes are saved here. Audio is deleted after successful processing."))
           .font(.caption)
           .foregroundStyle(.secondary)
 
         Divider()
 
-        Text("Disk usage")
+        Text(UIStrings.text("Disk usage"))
           .font(.headline)
 
         if let usage = model.storageUsage {
@@ -701,27 +724,27 @@ private struct StorageSettingsPane: View {
 
           HStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
-              Text("Clean up audio")
+              Text(UIStrings.text("Clean up audio"))
                 .font(.body.weight(.medium))
-              Text(
+              Text(UIStrings.resolve(
                 usage.archiveAudioBytes > 0
                   ? "Deletes audio recordings of finished meetings. Recovery audio for unfinished captures is kept."
                   : usage.recoveryAudioBytes > 0
                     ? "Finished-meeting audio is already clear. Recovery audio for unfinished captures is kept for recovery."
-                    : "No finished-meeting audio is stored.")
+                    : "No finished-meeting audio is stored."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
-            Button(model.audioCleanupInProgress ? "Cleaning up…" : "Clean Up…") {
+            Button(UIStrings.resolve(model.audioCleanupInProgress ? "Cleaning up…" : "Clean Up…")) {
               model.requestAudioCleanup()
             }
             .disabled(model.audioCleanupInProgress || usage.archiveAudioBytes == 0)
           }
 
           if !model.audioCleanupStatusText.isEmpty {
-            Text(model.audioCleanupStatusText)
+            Text(UIStrings.resolve(model.audioCleanupStatusText))
               .font(.caption)
               .foregroundStyle(
                 model.audioCleanupStatusText.contains("pending") ? .orange : .secondary)
@@ -730,7 +753,7 @@ private struct StorageSettingsPane: View {
           HStack(spacing: 8) {
             ProgressView()
               .controlSize(.small)
-            Text("Measuring…")
+            Text(UIStrings.text("Measuring…"))
               .font(.caption)
               .foregroundStyle(.secondary)
           }
@@ -740,14 +763,14 @@ private struct StorageSettingsPane: View {
 
         HStack(spacing: 16) {
           VStack(alignment: .leading, spacing: 4) {
-            Text("Sync to a remote Mac")
+            Text(UIStrings.text("Sync to a remote Mac"))
               .font(.body.weight(.medium))
-            Text("Send a copy over SSH. SSH key authentication must be set up first.")
+            Text(UIStrings.text("Send a copy over SSH. SSH key authentication must be set up first."))
               .font(.caption)
               .foregroundStyle(.secondary)
           }
           Spacer()
-          Toggle("Sync to a remote Mac", isOn: $model.remoteSyncEnabled)
+          Toggle(UIStrings.text("Sync to a remote Mac"), isOn: $model.remoteSyncEnabled)
             .labelsHidden()
             .toggleStyle(.switch)
             .onChange(of: model.remoteSyncEnabled) {
@@ -761,27 +784,27 @@ private struct StorageSettingsPane: View {
         if model.remoteSyncEnabled {
           Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 14) {
             GridRow {
-              Text("Server address")
+              Text(UIStrings.text("Server address"))
                 .gridColumnAlignment(.trailing)
-              TextField("username@example.com", text: $model.remoteHostDraft)
+              TextField(UIStrings.text("username@example.com"), text: $model.remoteHostDraft)
             }
             GridRow {
-              Text("Folder")
+              Text(UIStrings.text("Folder"))
                 .gridColumnAlignment(.trailing)
-              TextField("~/MeetingNotes", text: $model.remotePathDraft)
+              TextField(UIStrings.text("~/MeetingNotes"), text: $model.remotePathDraft)
             }
           }
           .controlSize(.large)
         }
 
         if let error = model.archiveSettingsValidationError {
-          Label(error, systemImage: "exclamationmark.triangle.fill")
+          Label(UIStrings.resolve(error), systemImage: "exclamationmark.triangle.fill")
             .font(.caption)
             .foregroundStyle(.red)
         }
 
         if !model.settingsStatusText.isEmpty {
-          Text(model.settingsStatusText)
+          Text(UIStrings.resolve(model.settingsStatusText))
             .font(.caption)
             .foregroundStyle(model.settingsStatusText.contains("failed") ? .red : .secondary)
         }
@@ -805,7 +828,7 @@ private struct StorageUsageBar: View {
   let usage: MeetingStorageUsage
 
   private func formatted(_ bytes: Int64) -> String {
-    ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    UIStrings.bytes(bytes)
   }
 
   var body: some View {
@@ -846,7 +869,7 @@ private struct StorageUsageBar: View {
             value: formatted(usage.recoveryAudioBytes))
         }
         Spacer()
-        Text(formatted(usage.totalBytes) + " total")
+        Text(UIStrings.text("Total: \(formatted(usage.totalBytes))"))
           .font(.caption.weight(.medium))
           .foregroundStyle(.secondary)
       }
@@ -858,7 +881,7 @@ private struct StorageUsageBar: View {
       Circle()
         .fill(color)
         .frame(width: 7, height: 7)
-      Text(label)
+      Text(UIStrings.resolve(label))
         .font(.caption)
         .foregroundStyle(.secondary)
       Text(value)
@@ -880,20 +903,20 @@ private struct HookSettingsPane: View {
 
         Divider()
 
-        Text("Command")
+        Text(UIStrings.text("Command"))
           .font(.headline)
 
         Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 14) {
           GridRow {
-            Text("Run on")
+            Text(UIStrings.text("Run on"))
               .gridColumnAlignment(.trailing)
-            Picker("Run on", selection: $model.postMeetingHookLocation) {
+            Picker(UIStrings.text("Run on"), selection: $model.postMeetingHookLocation) {
               ForEach(
                 RemoteSyncService.Configuration.HookLocation.allCases.filter {
                   model.remoteSyncEnabled || $0 != .remote
                 }
               ) { location in
-                Text(location.label).tag(location)
+                Text(UIStrings.resolve(location.label)).tag(location)
               }
             }
             .labelsHidden()
@@ -901,12 +924,12 @@ private struct HookSettingsPane: View {
 
           if model.postMeetingHookLocation != .disabled {
             GridRow {
-              Text("Command")
+              Text(UIStrings.text("Command"))
                 .gridColumnAlignment(.trailing)
               HStack(spacing: 8) {
-                TextField("Command to run after archive changes", text: $model.postMeetingHookCommand)
+                TextField(UIStrings.text("Command to run after archive changes"), text: $model.postMeetingHookCommand)
                   .textFieldStyle(.roundedBorder)
-                Button("Test", action: model.testPostMeetingHook)
+                Button(UIStrings.text("Test"), action: model.testPostMeetingHook)
                   .disabled(!model.canTestPostMeetingHook)
               }
             }
@@ -915,41 +938,41 @@ private struct HookSettingsPane: View {
         .controlSize(.large)
 
         if model.postMeetingHookLocation != .disabled {
-          Text("Runs inside the archive folder using a non-interactive shell. Use Test to verify that every required tool is available.")
+          Text(UIStrings.text("Runs inside the archive folder using a non-interactive shell. Use Test to verify that every required tool is available."))
             .font(.caption)
             .foregroundStyle(.secondary)
         }
 
         if !model.hookSettingsStatusText.isEmpty {
-          Text(model.hookSettingsStatusText)
+          Text(UIStrings.resolve(model.hookSettingsStatusText))
             .font(.caption)
             .foregroundStyle(model.hookSettingsStatusText.contains("failed") ? .red : .secondary)
         }
 
         Divider()
 
-        Text("Web request")
+        Text(UIStrings.text("Web request"))
           .font(.headline)
 
         Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 14) {
           GridRow {
-            Text("URL")
+            Text(UIStrings.text("URL"))
               .gridColumnAlignment(.trailing)
             HStack(spacing: 8) {
-              TextField("https://example.com/meetings", text: $model.httpHookURLDraft)
+              TextField(UIStrings.text("https://example.com/meetings"), text: $model.httpHookURLDraft)
                 .textFieldStyle(.roundedBorder)
-              Button("Test", action: model.testHTTPHook)
+              Button(UIStrings.text("Test"), action: model.testHTTPHook)
                 .disabled(!model.canTestHTTPHook)
             }
           }
 
           if !model.httpHookURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             GridRow {
-              Text("Send")
+              Text(UIStrings.text("Send"))
                 .gridColumnAlignment(.trailing)
-              Picker("Send", selection: $model.httpHookPayload) {
+              Picker(UIStrings.text("Send"), selection: $model.httpHookPayload) {
                 ForEach(RemoteSyncService.Configuration.HookPayload.allCases) { payload in
-                  Text(payload.label).tag(payload)
+                  Text(UIStrings.resolve(payload.label)).tag(payload)
                 }
               }
               .labelsHidden()
@@ -957,7 +980,7 @@ private struct HookSettingsPane: View {
             }
 
             GridRow {
-              Text("Headers")
+              Text(UIStrings.text("Headers"))
                 .gridColumnAlignment(.trailing)
               ZStack(alignment: .topLeading) {
                 GrowingTextEditor(text: $model.httpHookHeadersDraft, minHeight: 72)
@@ -970,7 +993,7 @@ private struct HookSettingsPane: View {
                   }
 
                 if model.httpHookHeadersDraft.isEmpty {
-                  Text("Authorization: Bearer your-token\nX-Source: Meeting Notes")
+                  Text(UIStrings.text("Authorization: Bearer your-token\nX-Source: Meeting Notes"))
                     .font(.system(.body, design: .monospaced))
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, 9)
@@ -984,13 +1007,13 @@ private struct HookSettingsPane: View {
         .controlSize(.large)
 
         if !model.httpHookURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-          Text("Sends the chosen Markdown file as the request body, with the meeting title, id, times, and folder as X-Meeting-Notes-… headers. Add one header per line to authenticate; your headers override the defaults.")
+          Text(UIStrings.text("Sends the chosen Markdown file as the request body, with the meeting title, id, times, and folder as X-Meeting-Notes-… headers. Add one header per line to authenticate; your headers override the defaults."))
             .font(.caption)
             .foregroundStyle(.secondary)
         }
 
         if !model.httpHookStatusText.isEmpty {
-          Text(model.httpHookStatusText)
+          Text(UIStrings.resolve(model.httpHookStatusText))
             .font(.caption)
             .foregroundStyle(model.httpHookStatusText.contains("failed") ? .red : .secondary)
         }
@@ -1041,26 +1064,26 @@ private struct TranscriptionsSettingsPane: View {
 
         HStack(spacing: 16) {
           VStack(alignment: .leading, spacing: 4) {
-            Text("Transcription engine")
+            Text(UIStrings.text("Transcription engine"))
               .font(.body.weight(.medium))
-            Text(
+            Text(UIStrings.resolve(
               model.transcriptionEngine == .openAI
                 ? "Audio is sent to OpenAI for transcription."
                 : model.transcriptionEngine == .senseVoice
                   ? "Audio never leaves this Mac. SenseVoice writes the final transcript with segment-level timestamps; first use downloads about 450 MB and compiles for 1–3 minutes."
                   : "Audio never leaves this Mac."
-            )
+            ))
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
           }
           Spacer()
-          Picker("Transcription engine", selection: Binding(
+          Picker(UIStrings.text("Transcription engine"), selection: Binding(
             get: { model.transcriptionEngine },
             set: { model.setTranscriptionEngine($0) }
           )) {
             ForEach(engineOptions, id: \.self) { option in
-              Text(option.label).tag(option)
+              Text(UIStrings.resolve(option.label)).tag(option)
             }
           }
           .labelsHidden()
@@ -1069,24 +1092,24 @@ private struct TranscriptionsSettingsPane: View {
 
         HStack(spacing: 16) {
           VStack(alignment: .leading, spacing: 4) {
-            Text("Live transcription engine")
+            Text(UIStrings.text("Live transcription engine"))
               .font(.body.weight(.medium))
-            Text(
+            Text(UIStrings.resolve(
               model.liveTranscriptionEngine == .openAI
                 ? "Used for the live preview while recording. OpenAI streams audio continuously, which can get expensive for long meetings."
                 : "Used for the live preview while recording."
-            )
+            ))
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
           }
           Spacer()
-          Picker("Live transcription engine", selection: Binding(
+          Picker(UIStrings.text("Live transcription engine"), selection: Binding(
             get: { model.liveTranscriptionEngine },
             set: { model.setLiveTranscriptionEngine($0) }
           )) {
             ForEach(liveEngineOptions, id: \.self) { option in
-              Text(option.label).tag(option)
+              Text(UIStrings.resolve(option.label)).tag(option)
             }
           }
           .labelsHidden()
@@ -1097,15 +1120,15 @@ private struct TranscriptionsSettingsPane: View {
 
         HStack(spacing: 16) {
           VStack(alignment: .leading, spacing: 4) {
-            Text("Floating subtitles")
+            Text(UIStrings.text("Floating subtitles"))
               .font(.body.weight(.medium))
-            Text("Show the live transcript in a small bar above the Dock while recording.")
+            Text(UIStrings.text("Show the live transcript in a small bar above the Dock while recording."))
               .font(.caption)
               .foregroundStyle(.secondary)
               .fixedSize(horizontal: false, vertical: true)
           }
           Spacer()
-          Toggle("Floating subtitles", isOn: Binding(
+          Toggle(UIStrings.text("Floating subtitles"), isOn: Binding(
             get: { model.liveTranscriptOverlayEnabled },
             set: { model.setLiveTranscriptOverlayEnabled($0) }
           ))
@@ -1117,14 +1140,14 @@ private struct TranscriptionsSettingsPane: View {
 
         HStack(spacing: 16) {
           VStack(alignment: .leading, spacing: 4) {
-            Text("Dictionary")
+            Text(UIStrings.text("Dictionary"))
               .font(.body.weight(.medium))
-            Text("Help Meeting Notes recognize names and specialist terminology.")
+            Text(UIStrings.text("Help Meeting Notes recognize names and specialist terminology."))
               .font(.caption)
               .foregroundStyle(.secondary)
           }
           Spacer()
-          Button("Edit Dictionary…") { showDictionary = true }
+          Button(UIStrings.text("Edit Dictionary…")) { showDictionary = true }
         }
         .sheet(isPresented: $showDictionary) {
           VStack(spacing: 0) {
@@ -1132,7 +1155,7 @@ private struct TranscriptionsSettingsPane: View {
             Divider()
             HStack {
               Spacer()
-              Button("Done") { showDictionary = false }
+              Button(UIStrings.text("Done")) { showDictionary = false }
                 .keyboardShortcut(.defaultAction)
             }
             .padding(12)
@@ -1144,14 +1167,14 @@ private struct TranscriptionsSettingsPane: View {
 
         HStack(spacing: 16) {
           VStack(alignment: .leading, spacing: 4) {
-            Text("Remove filler words")
+            Text(UIStrings.text("Remove filler words"))
               .font(.body.weight(.medium))
-            Text("Remove uh, um, er, hmm, and similar verbal pauses from transcripts.")
+            Text(UIStrings.text("Remove uh, um, er, hmm, and similar verbal pauses from transcripts."))
               .font(.caption)
               .foregroundStyle(.secondary)
           }
           Spacer()
-          Toggle("Remove filler words", isOn: Binding(
+          Toggle(UIStrings.text("Remove filler words"), isOn: Binding(
             get: { model.removeFillerWords },
             set: { model.setRemoveFillerWords($0) }
           ))
@@ -1163,14 +1186,14 @@ private struct TranscriptionsSettingsPane: View {
 
         HStack(spacing: 16) {
           VStack(alignment: .leading, spacing: 4) {
-            Text("Keep audio recordings")
+            Text(UIStrings.text("Keep audio recordings"))
               .font(.body.weight(.medium))
-            Text("Retain microphone and system audio and sync it to the archive.")
+            Text(UIStrings.text("Retain microphone and system audio and sync it to the archive."))
               .font(.caption)
               .foregroundStyle(.secondary)
           }
           Spacer()
-          Toggle("Keep audio recordings", isOn: Binding(
+          Toggle(UIStrings.text("Keep audio recordings"), isOn: Binding(
             get: { model.keepAudioAfterProcessing },
             set: { model.setKeepAudioAfterProcessing($0) }
           ))
@@ -1182,15 +1205,15 @@ private struct TranscriptionsSettingsPane: View {
 
         HStack(spacing: 16) {
           VStack(alignment: .leading, spacing: 4) {
-            Text("Delete detailed records automatically")
+            Text(UIStrings.text("Delete detailed records automatically"))
               .font(.body.weight(.medium))
-            Text("Remove word-for-word transcripts and retained audio after a set period.")
+            Text(UIStrings.text("Remove word-for-word transcripts and retained audio after a set period."))
               .font(.caption)
               .foregroundStyle(.secondary)
               .fixedSize(horizontal: false, vertical: true)
           }
           Spacer()
-          Toggle("Delete detailed records automatically", isOn: Binding(
+          Toggle(UIStrings.text("Delete detailed records automatically"), isOn: Binding(
             get: { model.automaticTranscriptDeletionEnabled },
             set: { model.setAutomaticTranscriptDeletionEnabled($0) }
           ))
@@ -1200,7 +1223,7 @@ private struct TranscriptionsSettingsPane: View {
 
         if model.automaticTranscriptDeletionEnabled {
           HStack {
-            Text("Delete after")
+            Text(UIStrings.text("Delete after"))
             Spacer()
             Stepper(
               value: Binding(
@@ -1208,7 +1231,7 @@ private struct TranscriptionsSettingsPane: View {
                 set: { model.setTranscriptRetentionDays($0) }),
               in: 1...3_650
             ) {
-              Text("\(model.transcriptRetentionDays) days")
+              Text(UIStrings.text("\(model.transcriptRetentionDays) days"))
                 .monospacedDigit()
                 .frame(minWidth: 74, alignment: .trailing)
             }
@@ -1216,14 +1239,14 @@ private struct TranscriptionsSettingsPane: View {
         }
 
         Label(
-          "Structured meeting notes stay available. Deleted transcripts and audio cannot be recovered.",
+          UIStrings.text("Structured meeting notes stay available. Deleted transcripts and audio cannot be recovered."),
           systemImage: "clock.arrow.circlepath"
         )
         .font(.caption)
         .foregroundStyle(.secondary)
 
         if !model.transcriptRetentionStatusText.isEmpty {
-          Text(model.transcriptRetentionStatusText)
+          Text(UIStrings.resolve(model.transcriptRetentionStatusText))
             .font(.caption)
             .foregroundStyle(
               model.transcriptRetentionStatusText.contains("failed") ? .red : .secondary)
@@ -1258,14 +1281,14 @@ private struct TanaSettingsPane: View {
 
         HStack(alignment: .top, spacing: 16) {
           VStack(alignment: .leading, spacing: 4) {
-            Text("Use Tana for enrichment")
+            Text(UIStrings.text("Use Tana for enrichment"))
               .font(.body.weight(.medium))
-            Text("Off by default. Nothing is read until you connect and choose Supertags.")
+            Text(UIStrings.text("Off by default. Nothing is read until you connect and choose Supertags."))
               .font(.caption)
               .foregroundStyle(.secondary)
           }
           Spacer()
-          Toggle("Use Tana for enrichment", isOn: Binding(
+          Toggle(UIStrings.text("Use Tana for enrichment"), isOn: Binding(
             get: { model.tanaEnabled },
             set: { model.setTanaEnabled($0) }
           ))
@@ -1281,19 +1304,19 @@ private struct TanaSettingsPane: View {
               HStack(spacing: 6) {
                 Image(systemName: model.tanaConnected ? "checkmark.circle.fill" : "circle.dashed")
                   .foregroundStyle(model.tanaConnected ? .green : .secondary)
-                Text(model.tanaConnected ? "Connected to Tana" : "Connect Tana")
+                Text(UIStrings.resolve(model.tanaConnected ? "Connected to Tana" : "Connect Tana"))
                   .font(.body.weight(.medium))
               }
-              Text("Authorization is handled by Tana Outliner and stored securely in Keychain.")
+              Text(UIStrings.text("Authorization is handled by Tana Outliner and stored securely in Keychain."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
             Spacer()
             if model.tanaConnected {
-              Button("Disconnect", action: model.disconnectTana)
+              Button(UIStrings.text("Disconnect"), action: model.disconnectTana)
                 .disabled(model.tanaConnectionInProgress)
             } else {
-              Button("Connect", action: model.connectTana)
+              Button(UIStrings.text("Connect"), action: model.connectTana)
                 .buttonStyle(.borderedProminent)
                 .disabled(model.tanaConnectionInProgress)
             }
@@ -1302,21 +1325,21 @@ private struct TanaSettingsPane: View {
           if model.tanaConnected {
             Divider()
 
-            Text("Graph")
+            Text(UIStrings.text("Graph"))
               .font(.headline)
 
             HStack {
-              Text("Workspace")
+              Text(UIStrings.text("Workspace"))
               Spacer()
-              Picker("Workspace", selection: Binding(
+              Picker(UIStrings.text("Workspace"), selection: Binding(
                 get: { model.tanaWorkspaceID },
                 set: { model.selectTanaWorkspace($0) }
               )) {
-                Text("Choose a workspace…").tag("")
+                Text(UIStrings.text("Choose a workspace…")).tag("")
                 if !model.tanaWorkspaceID.isEmpty,
                   !model.tanaWorkspaces.contains(where: { $0.id == model.tanaWorkspaceID })
                 {
-                  Text("\(model.tanaWorkspaceName.isEmpty ? "Selected workspace" : model.tanaWorkspaceName) (not loaded)")
+                  Text(UIStrings.text("\(model.tanaWorkspaceName.isEmpty ? "Selected workspace" : model.tanaWorkspaceName) (not loaded)"))
                     .tag(model.tanaWorkspaceID)
                 }
                 ForEach(model.tanaWorkspaces) { workspace in
@@ -1332,22 +1355,22 @@ private struct TanaSettingsPane: View {
               Divider()
 
               VStack(alignment: .leading, spacing: 5) {
-                Text("Supertags used for enrichment")
+                Text(UIStrings.text("Supertags used for enrichment"))
                   .font(.headline)
-                Text("Choose only the entity types that contain useful names, such as people, projects, products, or teams.")
+                Text(UIStrings.text("Choose only the entity types that contain useful names, such as people, projects, products, or teams."))
                   .font(.caption)
                   .foregroundStyle(.secondary)
                   .fixedSize(horizontal: false, vertical: true)
               }
 
-              TextField("Search Supertags", text: $searchText)
+              TextField(UIStrings.text("Search Supertags"), text: $searchText)
                 .textFieldStyle(.roundedBorder)
 
               if model.tanaSupertags.isEmpty {
                 ContentUnavailableView(
-                  "No Supertags found",
+                  UIStrings.text("No Supertags found"),
                   systemImage: "number",
-                  description: Text("Open this workspace in Tana Outliner, then reconnect.")
+                  description: Text(UIStrings.text("Open this workspace in Tana Outliner, then reconnect."))
                 )
                 .frame(maxWidth: .infinity, minHeight: 150)
               } else {
@@ -1387,14 +1410,14 @@ private struct TanaSettingsPane: View {
           }
 
           if !model.tanaStatusText.isEmpty {
-            Text(model.tanaStatusText)
+            Text(UIStrings.resolve(model.tanaStatusText))
               .font(.caption)
               .foregroundStyle(
                 model.tanaStatusText.localizedCaseInsensitiveContains("failed") ? .red : .secondary)
           }
 
           Label(
-            "Meeting Notes reads the selected entity names from the local Tana API only while Tana Outliner is open. It never changes your graph.",
+            UIStrings.text("Meeting Notes reads the selected entity names from the local Tana API only while Tana Outliner is open. It never changes your graph."),
             systemImage: "hand.raised"
           )
           .font(.caption)
@@ -1421,9 +1444,9 @@ private struct OpenAISettingsPane: View {
         Divider()
 
         HStack(spacing: 16) {
-          Text("API key")
+          Text(UIStrings.text("API key"))
             .font(.body.weight(.medium))
-          SecureField("sk-...", text: Binding(
+          SecureField(UIStrings.text("sk-..."), text: Binding(
             get: { model.openAITranscribeKeyDraft },
             set: { model.openAITranscribeKeyDraft = $0 }
           ))
@@ -1431,22 +1454,22 @@ private struct OpenAISettingsPane: View {
           .onChange(of: model.openAITranscribeKeyDraft) { model.saveOpenAITranscribeKey() }
           switch model.openAITranscribeKeyTestState {
           case .idle:
-            Button("Test", action: model.testOpenAITranscribeKey)
-              .help("Check that the API key works")
+            Button(UIStrings.text("Test"), action: model.testOpenAITranscribeKey)
+              .help(UIStrings.text("Check that the API key works"))
           case .testing:
             ProgressView()
               .controlSize(.small)
           case .succeeded:
-            Label("Works", systemImage: "checkmark.circle.fill")
+            Label(UIStrings.text("Works"), systemImage: "checkmark.circle.fill")
               .foregroundStyle(.green)
-              .help("The API key works")
+              .help(UIStrings.text("The API key works"))
           case .failed(let message):
-            Button("Retry", action: model.testOpenAITranscribeKey)
-              .help(message)
+            Button(UIStrings.text("Retry"), action: model.testOpenAITranscribeKey)
+              .help(UIStrings.resolve(message))
           }
         }
         if case .failed(let message) = model.openAITranscribeKeyTestState {
-          Text(message)
+          Text(UIStrings.resolve(message))
             .font(.caption)
             .foregroundStyle(.red)
         }
@@ -1468,37 +1491,37 @@ private struct DictionarySettingsPane: View {
 
       Divider()
 
-      Text("Add a term")
+      Text(UIStrings.text("Add a term"))
         .font(.headline)
 
       Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
         GridRow {
-          Text("Term")
+          Text(UIStrings.text("Term"))
             .gridColumnAlignment(.trailing)
-          TextField("Name or specialist term", text: $model.vocabularyTermDraft)
+          TextField(UIStrings.text("Name or specialist term"), text: $model.vocabularyTermDraft)
         }
         GridRow {
-          Text("May sound like")
+          Text(UIStrings.text("May sound like"))
             .gridColumnAlignment(.trailing)
-          TextField("Common mishearing (optional)", text: $model.vocabularyMishearingDraft)
+          TextField(UIStrings.text("Common mishearing (optional)"), text: $model.vocabularyMishearingDraft)
             .onSubmit(model.addVocabularyEntry)
         }
       }
       .controlSize(.large)
 
       HStack {
-        Text("Separate multiple alternatives with commas.")
+        Text(UIStrings.text("Separate multiple alternatives with commas."))
           .font(.caption)
           .foregroundStyle(.secondary)
         Spacer()
-        Button("Add Term", action: model.addVocabularyEntry)
+        Button(UIStrings.text("Add Term"), action: model.addVocabularyEntry)
           .buttonStyle(.borderedProminent)
           .disabled(!model.canAddVocabularyEntry)
       }
 
       Divider()
 
-      Text("Saved terms")
+      Text(UIStrings.text("Saved terms"))
         .font(.headline)
 
       if model.vocabularyEntries.isEmpty {
@@ -1523,14 +1546,14 @@ private struct DictionarySettingsPane: View {
       }
 
       if !model.vocabularyStatusText.isEmpty {
-        Text(model.vocabularyStatusText)
+        Text(UIStrings.resolve(model.vocabularyStatusText))
           .font(.caption)
           .foregroundStyle(.secondary)
       }
 
       Divider()
       Label(
-        "Common mishearings are corrected after transcription.",
+        UIStrings.text("Common mishearings are corrected after transcription."),
         systemImage: "info.circle"
       )
       .font(.caption)
@@ -1546,9 +1569,9 @@ private struct RecognitionEmptyState: View {
       Image(systemName: "text.book.closed")
         .font(.system(size: 27, weight: .light))
         .foregroundStyle(.tertiary)
-      Text("No custom terms yet")
+      Text(UIStrings.text("No custom terms yet"))
         .font(.body.weight(.medium))
-      Text("Add names, product names, or specialist terms above.")
+      Text(UIStrings.text("Add names, product names, or specialist terms above."))
         .font(.caption)
         .foregroundStyle(.secondary)
     }
@@ -1566,7 +1589,7 @@ private struct VocabularyRow: View {
         Text(entry.term)
           .font(.body.weight(.medium))
         if !entry.aliases.isEmpty {
-          Text("May sound like: \(entry.aliases.joined(separator: ", "))")
+          Text(UIStrings.text("May sound like: \(entry.aliases.joined(separator: ", "))"))
             .font(.caption)
             .foregroundStyle(.secondary)
         }
@@ -1576,7 +1599,7 @@ private struct VocabularyRow: View {
         Image(systemName: "trash")
       }
       .buttonStyle(.borderless)
-      .accessibilityLabel("Delete term")
+      .accessibilityLabel(UIStrings.text("Delete term"))
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 9)
@@ -1611,14 +1634,14 @@ private struct MicrophoneSettingsPane: View {
 
         HStack(alignment: .top, spacing: 16) {
           VStack(alignment: .leading, spacing: 4) {
-            Text("Use System Default")
+            Text(UIStrings.text("Use System Default"))
               .font(.body.weight(.medium))
-            Text("Follow the microphone selected in macOS System Settings.")
+            Text(UIStrings.text("Follow the microphone selected in macOS System Settings."))
               .font(.caption)
               .foregroundStyle(.secondary)
           }
           Spacer()
-          Toggle("Use System Default", isOn: Binding(
+          Toggle(UIStrings.text("Use System Default"), isOn: Binding(
             get: { model.useSystemDefaultMicrophone },
             set: { model.setUseSystemDefaultMicrophone($0) }
           ))
@@ -1630,14 +1653,14 @@ private struct MicrophoneSettingsPane: View {
           Divider()
 
           VStack(alignment: .leading, spacing: 10) {
-            Text("Microphone Priority")
+            Text(UIStrings.text("Microphone Priority"))
               .font(.headline)
-            Text("The first connected microphone in this list is used.")
+            Text(UIStrings.text("The first connected microphone in this list is used."))
               .font(.caption)
               .foregroundStyle(.secondary)
 
             if includedDevices.isEmpty {
-              Text("No microphones available.")
+              Text(UIStrings.text("No microphones available."))
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, minHeight: 80)
@@ -1680,7 +1703,7 @@ private struct MicrophoneSettingsPane: View {
 
           if !excludedDevices.isEmpty {
             Divider()
-            Text("Excluded Devices")
+            Text(UIStrings.text("Excluded Devices"))
               .font(.headline)
             VStack(spacing: 0) {
               ForEach(Array(excludedDevices.enumerated()), id: \.element.id) { index, device in
@@ -1692,16 +1715,16 @@ private struct MicrophoneSettingsPane: View {
                     .foregroundStyle(device.isConnected ? .primary : .secondary)
                   Spacer()
                   if !device.isConnected {
-                    Text("Disconnected")
+                    Text(UIStrings.text("Disconnected"))
                       .font(.caption)
                       .foregroundStyle(.secondary)
                   }
-                  Button("Restore") {
+                  Button(UIStrings.text("Restore")) {
                     model.setMicrophoneExcluded(device, excluded: false)
                   }
                   .buttonStyle(.borderless)
                   if !device.isConnected {
-                    Button("Forget", role: .destructive) {
+                    Button(UIStrings.text("Forget"), role: .destructive) {
                       model.removeMicrophone(device)
                     }
                     .buttonStyle(.borderless)
@@ -1719,14 +1742,9 @@ private struct MicrophoneSettingsPane: View {
         Divider()
 
         VStack(alignment: .leading, spacing: 10) {
-          Text("System Audio Capture")
+          Text(UIStrings.text("System Audio Capture"))
             .font(.headline)
-          Text(
-            "Exclude specific apps from the system-audio channel — useful for virtual-mic "
-              + "tools (Audio Hijack, Loopback, etc.) whose processed output would otherwise be "
-              + "captured as if it were a call participant, since system-audio capture works "
-              + "per-app rather than per-device."
-          )
+          Text(UIStrings.text("Exclude apps from system audio to avoid recording virtual-microphone output twice."))
           .font(.caption)
           .foregroundStyle(.secondary)
 
@@ -1740,7 +1758,7 @@ private struct MicrophoneSettingsPane: View {
                     .frame(width: 18)
                   Text(app.name)
                   Spacer()
-                  Button("Restore") { model.restoreSystemAudioApp(app) }
+                  Button(UIStrings.text("Restore")) { model.restoreSystemAudioApp(app) }
                     .buttonStyle(.borderless)
                 }
                 .padding(.vertical, 9)
@@ -1755,9 +1773,9 @@ private struct MicrophoneSettingsPane: View {
           let candidates = model.systemAudioAvailableApps.filter {
             !excludedIDs.contains($0.bundleIdentifier)
           }
-          Menu("Exclude an App…") {
+          Menu(UIStrings.text("Exclude an App…")) {
             if candidates.isEmpty {
-              Text("No other running apps detected")
+              Text(UIStrings.text("No other running apps detected"))
             } else {
               ForEach(candidates) { app in
                 Button(app.name) { model.excludeSystemAudioApp(app) }
@@ -1806,19 +1824,19 @@ private struct MicrophoneDeviceRow: View {
           .foregroundStyle(device.isConnected ? .primary : .secondary)
         Spacer()
         if isCurrent {
-          Text("Current")
+          Text(UIStrings.text("Current"))
             .font(.caption)
             .foregroundStyle(.white)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .background(Color.accentColor, in: Capsule())
         } else if device.isSystemDefault {
-          Text("macOS default")
+          Text(UIStrings.text("macOS default"))
             .font(.caption)
             .foregroundStyle(.secondary)
         }
         if !device.isConnected {
-          Text("Disconnected")
+          Text(UIStrings.text("Disconnected"))
             .font(.caption)
             .foregroundStyle(.secondary)
             .padding(.horizontal, 8)
@@ -1826,15 +1844,15 @@ private struct MicrophoneDeviceRow: View {
             .background(.quaternary, in: Capsule())
         }
         Menu {
-          Button("Move Up", action: moveUp)
+          Button(UIStrings.text("Move Up"), action: moveUp)
             .disabled(!canMoveUp)
-          Button("Move Down", action: moveDown)
+          Button(UIStrings.text("Move Down"), action: moveDown)
             .disabled(!canMoveDown)
           Divider()
-          Button("Exclude", action: exclude)
+          Button(UIStrings.text("Exclude"), action: exclude)
           if !device.isConnected {
             Divider()
-            Button("Forget Device", role: .destructive, action: remove)
+            Button(UIStrings.text("Forget Device"), role: .destructive, action: remove)
           }
         } label: {
           Image(systemName: "ellipsis")
@@ -1852,7 +1870,7 @@ private struct MicrophoneDeviceRow: View {
     .onDrag(beginDragging)
     .onHover { isHovered = $0 }
     .animation(.easeOut(duration: 0.12), value: isHovered)
-    .help("Drag to change microphone priority")
+    .help(UIStrings.text("Drag to change microphone priority"))
   }
 }
 
@@ -1940,7 +1958,7 @@ private final class SettingsWindowHostView: NSView {
     window.toolbar = nil
     window.titlebarAppearsTransparent = true
     window.titlebarSeparatorStyle = .none
-    window.title = "Meeting Notes Settings"
+    window.title = UIStrings.text("Meeting Notes Settings")
     window.titleVisibility = .hidden
     window.isMovableByWindowBackground = false
     window.minSize = NSSize(width: 640, height: 480)

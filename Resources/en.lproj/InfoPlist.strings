@@ -1,0 +1,5 @@
+"CFBundleDisplayName" = "Meeting Notes";
+"CFBundleName" = "Meeting Notes";
+"NSCalendarsFullAccessUsageDescription" = "Meeting Notes uses your calendar to suggest the current meeting title.";
+"NSMicrophoneUsageDescription" = "Meeting Notes records your microphone to create transcripts.";
+"NSScreenCaptureUsageDescription" = "Meeting Notes records awake displays for replay and system audio for transcription while daily recording is on. Separate meetings also capture system audio.";

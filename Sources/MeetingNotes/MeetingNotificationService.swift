@@ -29,24 +29,28 @@ final class MeetingNotificationService: NSObject, UNUserNotificationCenterDelega
   private override init() {
     super.init()
     center.delegate = self
+    refreshLanguage()
+  }
+
+  func refreshLanguage() {
     let startRecording = UNNotificationAction(
       identifier: startRecordingActionIdentifier,
-      title: "Start Recording")
+      title: UIStrings.text("Start Recording"))
     let dismiss = UNNotificationAction(
       identifier: dismissActionIdentifier,
-      title: "Not Now")
+      title: UIStrings.text("Not Now"))
     let stopRecording = UNNotificationAction(
       identifier: stopRecordingActionIdentifier,
-      title: "Stop Recording")
+      title: UIStrings.text("Stop Recording"))
     let keepRecording = UNNotificationAction(
       identifier: keepRecordingActionIdentifier,
-      title: "Keep Recording")
+      title: UIStrings.text("Keep Recording"))
     let resumeRecording = UNNotificationAction(
       identifier: resumeRecordingActionIdentifier,
-      title: "Resume Recording")
+      title: UIStrings.text("Resume Recording"))
     let keepPaused = UNNotificationAction(
       identifier: keepPausedActionIdentifier,
-      title: "Keep Paused")
+      title: UIStrings.text("Keep Paused"))
     center.setNotificationCategories([
       UNNotificationCategory(
         identifier: categoryIdentifier,
@@ -71,8 +75,8 @@ final class MeetingNotificationService: NSObject, UNUserNotificationCenterDelega
         let granted = try await center.requestAuthorization(options: [.alert, .sound])
         guard granted else { return }
         let content = UNMutableNotificationContent()
-        content.title = "\(app) meeting ended"
-        content.body = "Meeting Notes is still recording."
+        content.title = UIStrings.text("\(app) meeting ended")
+        content.body = UIStrings.text("Meeting Notes is still recording.")
         content.sound = .default
         content.categoryIdentifier = endedCategoryIdentifier
         try await center.add(UNNotificationRequest(
@@ -89,8 +93,8 @@ final class MeetingNotificationService: NSObject, UNUserNotificationCenterDelega
         let granted = try await center.requestAuthorization(options: [.alert, .sound])
         guard granted else { return }
         let content = UNMutableNotificationContent()
-        content.title = "Meeting paused"
-        content.body = "No meaningful audio was detected for 15 minutes."
+        content.title = UIStrings.text("Meeting paused")
+        content.body = UIStrings.text("No meaningful audio was detected for 15 minutes.")
         content.sound = .default
         content.categoryIdentifier = pausedCategoryIdentifier
         try await center.add(UNNotificationRequest(
@@ -125,8 +129,8 @@ final class MeetingNotificationService: NSObject, UNUserNotificationCenterDelega
         guard granted else { return }
 
         let content = UNMutableNotificationContent()
-        content.title = "\(app) meeting detected"
-        content.body = "Camera and microphone are active. Open Meeting Notes to start recording."
+        content.title = UIStrings.text("\(app) meeting detected")
+        content.body = UIStrings.text("Camera and microphone are active. Open Meeting Notes to start recording.")
         content.sound = .default
         content.categoryIdentifier = categoryIdentifier
 

@@ -182,7 +182,40 @@ MEETING_NOTES_TEST_COMMAND="<摘要命令>" MEETING_NOTES_TRANSLATION_INPUT=/abs
 
 普通 `swift test` 跳过真实 CLI 样例，覆盖 JSON 提取、设置默认值与读写、stdin 大输入、非零退出、超时、取消、生产解码及更新门禁。真实调用日志和执行结论在总仓 `.local/tmp/meeting-notes/RECORD.md`；长期维护合同以本文件为准。
 
-## MEET-4 常开模式（2026-10-08）
+## 统一日常记录、Today 与完整 UI 本地化（2026-10-08）
+
+本节替代早期 Today 菜单切片的未集成状态，并覆盖下节 MEET-4 中仅麦克风、静音删段、同步退出的旧行为；旧段/独立会议接口仍兼容。用户已正式确认：T3 保留任务标题、状态、请求和最终答复；屏幕范围为所有亮着的显示器。本轮只完成源码与离线验证，未部署，运行中的 24 小时实验仍是原版二进制。
+
+主入口是 **开始记录 / 停止记录**，无需会议标题或预先分类；旧会议在“单独会议（高级）”中保留。`AppModel` 向 `LifelogController` 注入 `UnifiedSegmentCapture`。默认新增设置为 unifiedMedia=true、allDisplays=true、screenCapacityGB=10、t3Enabled=true、t3IncludeText=true，原 enabled（默认 false）和音频留存偏好保留。旧安装缺少新字段时采用上述默认；第一次启用或部署后恢复已启用状态时落 enabledAt。加载设置本身不写 defaults。本轮没有运行新 app，因此未迁移实验偏好。
+
+`DisplayCaptureGate` 在初始启动、重试、唤醒及记录中检查 console session / 亮屏列表。屏幕、系统睡眠、session 暂停各有独立门闩；屏幕唤醒不能清除 session 锁。锁定/熄屏事件同步关闭输出准入和麦克风，再异步等待启动中的 stream、WAV 与视频 writer 收尾；恢复排空旧 generation 后另开段。亮屏列表变化会轮换段。macOS 没有公开稳定的 unlocked 谓词：公开 NSWorkspace session/screen 通知加 `CGSessionCopyCurrentDictionary` 的 console 位，辅以非公开锁位和 distributed lock/unlock 通知；不能将 SCShareableContent 成功当解锁证据，也不能声称漏通知时有系统级锁屏保证。当前桌面只读探针确认 console=true、active 私有键缺失，故不再依赖不存在的 active 键。真实锁屏/多屏热插拔仍须实验后验收。
+
+每个亮着的显示器一个 ScreenCaptureKit stream，只有一个 stream 提供系统混音；单独 AVAudioEngine 采一次麦克风。保留既有系统应用排除和排除本进程音频策略。视频上限边长 1920、2 fps，writer 背压丢帧计数；音频固定 16 kHz 单声道，两轨通过同一 CaptureClock 将源 host timestamp 映射至段起点，在首 buffer 前补齐启动延迟；屏幕首帧时间也由该时钟映射，而非将回调队列延迟当成采集时间。调度、设备/框架时间戳及启动延迟仍须实采测量，不承诺样本级无缝。视频独立于音频静音处理：
+
+```text
+<root>/YYYY-MM-DD/HHmmss-id8/{segment.json,microphone.wav,system.wav,transcript.md}
+<root>/screen/YYYY-MM-DD/<uuid>/screen-<displayID>.mp4
+<root>/t3/activity.json
+<root>/selections/<uuid>/{selection.json,transcript.md,references.md,meeting.md,summary.json}
+```
+
+`segment.json` 的 screenRelativeFolder/media 保存回看文件、实际首帧/结束、丢帧、gap 与失败信息；源文件收尾后才进入转写。系统音轨的语音同样防止误删静音段；纯静音桌面保留 screen 与 empty 元数据，不触发 ASR。成功后音频按既有留存设置删除，两轨一致，screen 不随之删除。每秒检查 screen 子根逻辑文件字节，达到配置容量暂停两种媒体；不是删除策略，检查周期/缓冲可能少量超额，失败/未转写音频和 T3 占用不计入该 screen 上限。Settings 显示用量和上限。失败保留源文件和可读错误；正常退出由 app delegate 等待媒体及 T3 清理，不等最终 ASR，待处理段下次恢复。切根继续要求关闭并排空在途/失败段。
+
+两条 WAV 都在现有 `FinalTranscriptionEngine` / `TranscriptionLock` 内严格读取和本机引擎处理；旧无系统轨段兼容，OpenAI 在锁内拒绝，未重写 ASR、锁和回退算法。正式会议先等待统一采集收尾才接管设备，停止后恢复日常记录。录制期间 T3 独立运行，显示器暂停不停止任务证据。
+
+T3 consumer 每 60 秒调用用户可配置的绝对 t3ctl 路径（默认 `~/.local/bin/t3ctl`），通过本机公开 session/RPC 只读 observe，没有每分钟 LLM 任务。5 分钟 overlap + source ID/updatedAt/hash upsert，跨页采用最早 observedAt 推进水位；不完整、投影截断、循环游标或未知 schema 不前移水位。仅保留请求和最终答复正文，流式回复只保留状态；正文单条上限 12000 字符，显式 textTruncated，完整文本可打开原 T3 链接。投影每线程 message/run 上限 200/100，冻结候选线程 ≤100，consumer 最多 4 页、总 message/run 各 ≤10000；到达界限明确显示错误，不静默淘汰。缓存持久化并恢复，元数据模式清除缓存正文。未知 schema/损坏缓存不覆盖；服务不可用/超时独立可见并重试，不丢媒体记录。线程状态不推断人的焦点，也不是全量工具活动时间线。
+
+GUI transport 使用显式 PATH、双管道有界读取、70 秒超时；取消发一次 TERM 并给 helper 清理时间，25 秒后仍未退出只强停自身子进程。Exporter observe 的 RPC/签发/撤销各有限时，TERM 走 finally 撤销短期 session，输出不含令牌。签发服务无回应而无法取得 session ID、服务无法撤销或强退时不能保证即时撤销，15 分钟 session TTL 是剩余边界。非 observe 的旧 t3ctl 行为保持兼容。
+
+Today 从缓存合并最近 12 条媒体段、最多 20 条消息和 12 条额外重叠 run，按时间排列并标来源；更多入口打开日期目录 / T3 缓存，旧会议独立可读。屏幕仅回看引用，不做 OCR/视觉模型识别。选段窗口支持标题、起止（≤48 小时）、完整逐字稿、pending/failed 状态，跨边界保留整句，保存新 selection 不改源段。生成纪要复用 `LifelogDigest` 分块/归并，只用已配置的日常 command；Off、Codex 或未配 command 时按钮禁用并说明，不临时转云。command 是否连接本地由用户原配置决定，程序不另设后端。T3/屏幕引用单列在 references.md，仅表示时间重叠。
+
+UI 使用 `UILanguage`（系统默认、简中、English），手选即时更新 SwiftUI locale、显式 Bundle 查找和通知动作；与文稿/转写语言分离。全部 owned 菜单、Settings pane、Today/选段、提示、help/accessibility、状态/alert、日期与容量显示都经 en/zh-Hans 表或所选 locale；保留英文 fallback。品牌、用户正文/标题、模型 ID、命令/路径/协议/存档 raw 值、系统/第三方原始错误不翻译；默认模型提示词和生成文稿不是 UI 语言内容。Apple 权限弹窗/第三方 Sparkle 自有界面由其宿主语言机制控制；本 app 的隐私用途有英中 InfoPlist.strings。`scripts/build-app.sh` 复制 lproj；验证使用独立 Foundation 进程对打包 .app 实际查找，不启动 app。
+
+最终离线验证与源码 SHA256 清单见根 `.local/tmp/lifelog-unified-capture/INTEGRATE-RECORD.md`，覆盖严格 Swift 整包、锁 fixture、T3 Python、已知坏样本和冻结 APFS release 打包。真实权限、菜单视觉/热切语言、多屏锁屏/睡眠、采集时间对齐、设备/磁盘长时故障、24h 资源曲线与真实摘要质量尚未实采验收。原实验 2026-10-08T04:01:18Z 至 2026-10-09T04:01:18Z 不因本轮构建而验收；部署留给实验结束后主线程决定。
+
+## MEET-4 常开模式（2026-10-08，原始麦克风基线）
+
+以下保留原实验与兼容接口合同；统一模式以本节上方的新合同为准。
 
 **Settings → Always-on → Record continuously**，默认关闭。麦克风沿用 Microphone 面板的设备 UID/优先级；建议实验固定 USB 输入并确认它仍连接。此模式只采麦克风，不采系统音频，系统应用排除列表仍仅影响正式会议。
 默认根 `~/jieyuexing-universe/.state/opsail/lifelog`，与会议归档、Spool 的相同/父子路径（含可解析符号链接）互斥，文件系统根也拒绝。反向修改会议归档时同样校验。修改常开根前必须先关闭录音并排空：当前段、正在启动、在途转写、内存队列以及磁盘中的 recording/pending/failed 任一存在都拒绝切根并显示提示；旧根元数据读错也拒绝。关闭开关并处理 failed 后才能换根，不搬移或删除历史，不建立历史根注册表。同根设置修改（含可解析符号链接别名）不触发切根或把当前段加入转写队列；拒绝后界面恢复实际根。

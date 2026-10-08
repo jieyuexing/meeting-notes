@@ -125,7 +125,7 @@ import Testing
 }
 
 @Test func bundledCodexExecutableFollowsThePackageManifest() throws {
-  let app = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString)/ChatGPT.app")
+  let app = TestTemporary.root.appending(path: "\(UUID().uuidString)/ChatGPT.app")
   defer { try? FileManager.default.removeItem(at: app.deletingLastPathComponent()) }
   let package = app.appending(path: "Contents/Resources/codex-cli")
   try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
@@ -462,7 +462,7 @@ import Testing
 }
 
 @Test func successfulFinalizationReplacesLiveFile() async throws {
-  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let root = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
   let store = MeetingStore(root: root, sync: sync)
@@ -482,7 +482,7 @@ import Testing
 }
 
 @Test func finalizationMovesTheMeetingIntoTheArchive() async throws {
-  let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let base = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: base) }
   let spool = base.appending(path: "spool")
   let archive = base.appending(path: "archive")
@@ -524,7 +524,7 @@ import Testing
 }
 
 @Test func interruptedCaptureStaysInTheSpoolForRecovery() async throws {
-  let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let base = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: base) }
   let spool = base.appending(path: "spool")
   let archive = base.appending(path: "archive")
@@ -541,7 +541,7 @@ import Testing
 }
 
 @Test func startupPromotionMovesCompletedMeetingsAndPrefersTheArchiveCopy() async throws {
-  let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let base = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: base) }
   let spool = base.appending(path: "spool")
   let archive = base.appending(path: "archive")
@@ -587,7 +587,7 @@ import Testing
 }
 
 @Test func finalizationReplacesAStaleArchiveMirrorOfTheSameMeeting() async throws {
-  let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let base = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: base) }
   let spool = base.appending(path: "spool")
   let archive = base.appending(path: "archive")
@@ -623,7 +623,7 @@ import Testing
 }
 
 @Test func archiveNormalizationDropsALeftoverVisibleStateFile() async throws {
-  let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let base = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: base) }
   let spool = base.appending(path: "spool")
   let archive = base.appending(path: "archive")
@@ -650,7 +650,7 @@ import Testing
 }
 
 @Test func audioCleanupRemovesOnlyFinishedMeetingAudio() async throws {
-  let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let base = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: base) }
   let spool = base.appending(path: "spool")
   let archive = base.appending(path: "archive")
@@ -688,7 +688,7 @@ import Testing
 }
 
 @Test func layoutMigrationBacksUpTheArchiveFirst() async throws {
-  let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let base = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: base) }
   let spool = base.appending(path: "spool")
   let archive = base.appending(path: "archive")
@@ -746,7 +746,7 @@ import Testing
 }
 
 @Test func successfulProcessingCanRemoveRecoveryAudio() async throws {
-  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let root = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
   let store = MeetingStore(root: root, sync: sync)
@@ -802,7 +802,7 @@ import Testing
 }
 
 @Test func wavCheckpointLeavesRecoverableHeader() throws {
-  let url = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let url = TestTemporary.root.appending(path: UUID().uuidString)
     .appendingPathExtension("wav")
   defer { try? FileManager.default.removeItem(at: url) }
   let handle = try WavFile.create(at: url)
@@ -819,7 +819,7 @@ import Testing
 }
 
 @Test func meaningfulSignalDetectionIgnoresSilentCaptureTracks() throws {
-  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let root = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
 
@@ -869,7 +869,7 @@ import Testing
 }
 
 @Test func persistedSpeakerNamesAreNormalizedToUnknown() async throws {
-  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let root = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
   let store = MeetingStore(root: root, sync: sync)
@@ -903,7 +903,7 @@ import Testing
 }
 
 @Test func pointerTracksPauseTitleAndFailure() async throws {
-  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let root = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
   let store = MeetingStore(root: root, sync: sync)
@@ -926,7 +926,7 @@ import Testing
 }
 
 @Test func stoppedMeetingFinalizationDoesNotReplaceANewActiveMeeting() async throws {
-  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let root = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
   let store = MeetingStore(root: root, sync: sync)
@@ -955,7 +955,7 @@ import Testing
 }
 
 @Test func stoppedMeetingFinalizationCompletesPointerWhenNoNewMeetingStarted() async throws {
-  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let root = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
   let store = MeetingStore(root: root, sync: sync)
@@ -974,7 +974,7 @@ import Testing
 }
 
 @Test func completedMeetingLookupDoesNotReplaceTheActiveMeeting() async throws {
-  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let root = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
   let store = MeetingStore(root: root, sync: sync)
@@ -1055,7 +1055,7 @@ import Testing
 }
 
 @Test func persistedMeetingCreatesDurableSyncMarkers() async throws {
-  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let root = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
   let store = MeetingStore(root: root, sync: sync)
@@ -1070,7 +1070,7 @@ import Testing
 }
 
 @Test func emptyStartupFilesAreNotOfferedForRecovery() async throws {
-  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let root = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
   let store = MeetingStore(root: root, sync: sync)
@@ -1084,7 +1084,7 @@ import Testing
 }
 
 @Test func failedMeetingWithSilentAudioRemainsVisibleButIsNotRecoverable() async throws {
-  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let root = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
   let store = MeetingStore(root: root, sync: sync)
@@ -1102,7 +1102,7 @@ import Testing
 }
 
 @Test func recoveryCanTargetASpecificMeeting() async throws {
-  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let root = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
   let store = MeetingStore(root: root, sync: sync)
@@ -1131,7 +1131,7 @@ import Testing
 }
 
 @Test func activelyManagedMeetingsAreExcludedFromRecovery() async throws {
-  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let root = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
   let store = MeetingStore(root: root, sync: sync)
@@ -1162,7 +1162,7 @@ import Testing
 }
 
 @Test func completedMeetingsReturnsOnlyTodayNewestFirst() async throws {
-  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let root = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
   let store = MeetingStore(root: root, sync: sync)
@@ -1182,7 +1182,7 @@ import Testing
 }
 
 @Test func completedMeetingRenameMovesItsFolderAndUpdatesPointer() async throws {
-  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let root = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
   let store = MeetingStore(root: root, sync: sync)
@@ -1246,7 +1246,7 @@ import Testing
 }
 
 @Test func startupNormalizationRepairsFoldersRenamedByOlderBuilds() async throws {
-  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let root = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
   let store = MeetingStore(root: root, sync: sync)
@@ -1271,7 +1271,7 @@ import Testing
 }
 
 @Test func startupNormalizationPreservesCalendarParticipants() async throws {
-  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let root = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
   let store = MeetingStore(root: root, sync: sync)
@@ -1302,7 +1302,7 @@ import Testing
 }
 
 @Test func startupNormalizationAcceptsAnyTimePrefixForAMatchingFolder() async throws {
-  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let root = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
   let store = MeetingStore(root: root, sync: sync)
@@ -1322,7 +1322,7 @@ import Testing
 }
 
 @Test func completedMeetingNotesCanBeRecreatedFromStoredState() async throws {
-  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let root = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
   let store = MeetingStore(root: root, sync: sync)
@@ -1546,7 +1546,7 @@ import Testing
 }
 
 @Test func legacyFoldersMigrateToWeekLayoutWithoutLosingAnything() async throws {
-  let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let base = TestTemporary.root.appending(path: UUID().uuidString)
   let spool = base.appending(path: "spool")
   let archive = base.appending(path: "archive")
   defer { try? FileManager.default.removeItem(at: base) }
@@ -1589,7 +1589,7 @@ import Testing
   #expect(moved == 1)
 
   // Everything moved intact, and the old location is gone rather than duplicated.
-  let migrated = spool.appending(path: "2026/W29/2026-07-15/0834-project-atlas-review-3F0A1AEA")
+  let migrated = spool.appending(path: "2026/W29/2026-07-15/0834-project-atlas-review-3F0A1AEA", directoryHint: .isDirectory)
   #expect(manager.fileExists(atPath: migrated.appending(path: "meeting.md").path))
   #expect(manager.fileExists(atPath: migrated.appending(path: "transcript.md").path))
   #expect(manager.fileExists(atPath: migrated.appending(path: "microphone.wav").path))
@@ -1620,7 +1620,7 @@ import Testing
 }
 
 @Test func legacyCleanupIgnoresFinderFilesButKeepsRealContent() async throws {
-  let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let base = TestTemporary.root.appending(path: UUID().uuidString)
   let spool = base.appending(path: "spool")
   defer { try? FileManager.default.removeItem(at: base) }
   let manager = FileManager.default
@@ -1766,7 +1766,7 @@ import Testing
 
 @Test func httpHookReadsTheHiddenArchiveStateFile() throws {
   let manager = FileManager.default
-  let folder = manager.temporaryDirectory.appending(path: UUID().uuidString)
+  let folder = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? manager.removeItem(at: folder) }
   try manager.createDirectory(at: folder, withIntermediateDirectories: true)
 
@@ -2000,7 +2000,7 @@ import Testing
 }
 
 @Test func expiredTranscriptAndAudioArePurgedButStructuredNoteRemains() async throws {
-  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let root = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
   let store = MeetingStore(root: root, sync: sync)
@@ -2043,7 +2043,7 @@ import Testing
 }
 
 @Test func localArchiveSyncExcludesAudioAndCopiesLivePointer() async throws {
-  let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let base = TestTemporary.root.appending(path: UUID().uuidString)
   let spool = base.appending(path: "spool")
   let archive = base.appending(path: "archive")
   defer { try? FileManager.default.removeItem(at: base) }
@@ -2070,7 +2070,7 @@ import Testing
 }
 
 @Test func localArchiveSyncKeepsLiveAudioPrivateWhenRetentionIsEnabled() async throws {
-  let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let base = TestTemporary.root.appending(path: UUID().uuidString)
   let spool = base.appending(path: "spool")
   let archive = base.appending(path: "archive")
   defer { try? FileManager.default.removeItem(at: base) }
@@ -2111,7 +2111,7 @@ import Testing
 }
 
 @Test func hookCompletionMarkerPreventsARerunForTheSameRevision() throws {
-  let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let folder = TestTemporary.root.appending(path: UUID().uuidString)
   try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
   defer { try? FileManager.default.removeItem(at: folder) }
 
@@ -2127,7 +2127,7 @@ import Testing
 
 @Test func samePhysicalDirectoryDetectionSeesThroughSymlinks() throws {
   let manager = FileManager.default
-  let base = manager.temporaryDirectory.appending(path: UUID().uuidString)
+  let base = TestTemporary.root.appending(path: UUID().uuidString)
   let real = base.appending(path: "real")
   let link = base.appending(path: "link")
   let other = base.appending(path: "other")

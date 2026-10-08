@@ -33,6 +33,9 @@ struct LifelogSegment: Codable, Equatable, Sendable {
   var transcribedAt: Date?
   var error: String?
   var transcript: [TranscriptTurn]?
+  /// Independent screen directory; never subject to audio retention/silence deletion.
+  var screenRelativeFolder: String?
+  var media: UnifiedCaptureMetadata?
 }
 
 /// Per-day counters for segments that were never kept.
@@ -81,8 +84,7 @@ struct LifelogStore: Sendable {
 
   func audioURL(in folder: URL) -> URL { folder.appending(path: Self.audioFileName) }
 
-  /// Lifelog is microphone-only; this file is never written. Passing it lets
-  /// the shared final transcription entry treat the system track as absent.
+  /// Optional for historical microphone-only segments.
   func systemAudioURL(in folder: URL) -> URL { folder.appending(path: "system.wav") }
 
   func createSegment(id: UUID, startedAt: Date) throws -> (segment: LifelogSegment, folder: URL) {
@@ -109,6 +111,11 @@ struct LifelogStore: Sendable {
 
   /// Removes a segment that never contained meaningful signal and counts it.
   func discardSilentSegment(_ segment: LifelogSegment, in folder: URL, seconds: Double) throws {
+    guard segment.screenRelativeFolder == nil else {
+      try complete(segment, in: folder, turns: [], transcriptionStartedAt: Date(),
+        transcribedAt: Date(), deleteAudio: true)
+      return
+    }
     let day = dayKey(segment.startedAt)
     var stats = dayStats(day)
     stats.silentSegmentsDiscarded += 1
@@ -139,9 +146,10 @@ struct LifelogStore: Sendable {
     }
     try save(updated, in: folder)
     if deleteAudio || lines.isEmpty {
-      let audio = audioURL(in: folder)
+      for audio in [audioURL(in: folder), systemAudioURL(in: folder)] {
       if FileManager.default.fileExists(atPath: audio.path) {
         try FileManager.default.removeItem(at: audio)
+      }
       }
     }
   }

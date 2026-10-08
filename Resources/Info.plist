@@ -40,11 +40,11 @@
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>Meeting Notes uses your calendar to suggest the current meeting title.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Meeting Notes records your microphone for local transcription.</string>
+	<string>Meeting Notes records your microphone to create transcripts.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSScreenCaptureUsageDescription</key>
-	<string>Meeting Notes captures system audio from calls for local transcription.</string>
+	<string>Meeting Notes records awake displays for replay and system audio for transcription while daily recording is on. Separate meetings also capture system audio.</string>
 	<key>SUEnableAutomaticChecks</key>
 	<false/>
 	<key>SUAllowsAutomaticUpdates</key>

@@ -120,9 +120,18 @@ enum LifelogDigest {
   static func generate(
     store: LifelogStore, day: String, label: String?, chunkCharacters: Int,
     language: MeetingNotesLanguage, request: Request?, backendDescription: String? = nil,
-    now: @Sendable () -> Date = { Date() }
+    now: @Sendable () -> Date = { Date() },
+    selectedEntries: [Entry]? = nil, outputFolder: URL? = nil
   ) async throws -> Run {
-    let entries = entries(store: store, day: day)
+    let entries = selectedEntries ?? entries(store: store, day: day)
+    func save(_ run: Run, markdown: String?) throws {
+      guard let outputFolder else { try store.saveDigest(run, markdown: markdown); return }
+      if let markdown {
+        try Data(markdown.replacingOccurrences(of: "](../", with: "](../../").utf8)
+          .write(to: outputFolder.appending(path: "meeting.md"), options: .atomic)
+      }
+      try LifelogStore.encoder.encode(run).write(to: outputFolder.appending(path: "summary.json"), options: .atomic)
+    }
     var run = Run(
       date: day, label: label, generatedAt: now(), status: .skipped, error: nil,
       durationSeconds: 0, inputCharacters: 0, chunkCount: 0, requestCount: 0,
@@ -177,7 +186,7 @@ enum LifelogDigest {
       run.durationSeconds = durationSeconds(started.duration(to: clock.now))
       run.inputCharacters = inputCharacters
       run.requestCount = requestCount
-      try store.saveDigest(run, markdown: render(day: day, digest: partials[0], entries: entries, run: run, store: store))
+      try save(run, markdown: render(day: day, digest: partials[0], entries: entries, run: run, store: store))
     } catch is CancellationError {
       throw CancellationError()
     } catch {
@@ -186,7 +195,7 @@ enum LifelogDigest {
       run.durationSeconds = durationSeconds(started.duration(to: clock.now))
       run.inputCharacters = inputCharacters
       run.requestCount = requestCount
-      try store.saveDigest(run, markdown: nil)
+      try save(run, markdown: nil)
     }
     return run
   }

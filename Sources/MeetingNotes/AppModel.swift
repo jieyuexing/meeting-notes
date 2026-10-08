@@ -47,7 +47,11 @@ final class AppModel {
   var recoverableMeetingAvailable = false
   var enrichmentRetryAvailable = false
   var displayedMeetings: [TodayMeetingSummary] = []
+  /// A bounded read of the selected day's separate lifelog store. This is
+  /// refreshed on lifecycle/navigation events, never from SwiftUI `body`.
+  var displayedLifelogSegments: [TodayLifelogSummary] = []
   var selectedMeetingDate = Calendar.autoupdatingCurrent.startOfDay(for: Date())
+  var uiLanguage = UILanguage.load()
   /// True while the meeting list is meant to show "today". Midnight and wake
   /// then advance the list automatically; an explicit visit to an older day
   /// stays put until the user navigates back.
@@ -192,6 +196,7 @@ final class AppModel {
     let finalEngine = final
     let spool = root
     lifelog = LifelogController(
+      unified: UnifiedSegmentCapture(),
       transcribe: { try await finalEngine.process(microphone: $0, system: $1, onDeviceOnly: true) },
       reservedRoots: { [spool, Self.archiveRootURL(for: ArchiveSettingsStore.load().localPath)] })
     remoteSyncEnabled = archiveConfiguration.remoteSyncEnabled
@@ -493,6 +498,15 @@ final class AppModel {
         : "Meeting notes will be written in \(language.label)")
   }
 
+  func setUILanguage(_ language: UILanguage) {
+    guard uiLanguage != language else { return }
+    uiLanguage = language
+    UILanguage.save(language)
+    MeetingNotificationService.shared.refreshLanguage()
+  }
+
+  func ui(_ key: String) -> String { UIStrings.string(key, language: uiLanguage) }
+
   /// Sparkle reads the stored channel on every check, so no relaunch is
   /// needed. Moving back to stable never downgrades an already-installed beta.
   func setUpdateChannel(_ channel: UpdateChannel) {
@@ -741,7 +755,7 @@ final class AppModel {
     else { tanaSelectedSupertagIDs.subtract(choice.tagIDs) }
     saveTanaSettings()
     let count = tanaSupertagChoices.filter(isTanaSupertagSelected).count
-    tanaStatusText = count == 0 ? "No Supertags selected" : "\(count) Supertag\(count == 1 ? "" : "s") selected"
+    tanaStatusText = count == 0 ? "No Supertags selected" : "Selected Supertags: \(count)"
   }
 
   func refreshTanaConnection() async {
@@ -796,9 +810,9 @@ final class AppModel {
 
   var meetingDayTitle: String {
     let calendar = Calendar.autoupdatingCurrent
-    if calendar.isDateInToday(selectedMeetingDate) { return "Today" }
-    if calendar.isDateInYesterday(selectedMeetingDate) { return "Yesterday" }
-    return selectedMeetingDate.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
+    if calendar.isDateInToday(selectedMeetingDate) { return ui("Today") }
+    if calendar.isDateInYesterday(selectedMeetingDate) { return ui("Yesterday") }
+    return selectedMeetingDate.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).locale(uiLanguage.locale))
   }
 
   var canShowNextMeetingDay: Bool {
@@ -862,6 +876,25 @@ final class AppModel {
       on: requestedDate,
       calendar: .autoupdatingCurrent
     )
+    refreshLifelogDay(requestedDate)
+  }
+
+  private func refreshLifelogDay(_ date: Date) {
+    let day = lifelog.store.dayKey(date)
+    // The popover is intentionally bounded. Older entries remain on disk and
+    // can be reached by day navigation without scanning all archive days.
+    displayedLifelogSegments = lifelog.store.segments(on: day).suffix(12).reversed().map {
+      TodayLifelogSummary(
+        id: $0.segment.id,
+        startedAt: $0.segment.startedAt,
+        endedAt: $0.segment.endedAt,
+        status: $0.segment.status,
+        characterCount: $0.segment.characterCount ?? 0,
+        folder: $0.folder,
+        error: $0.segment.error,
+        screenFolder: $0.segment.screenRelativeFolder.map { lifelog.store.root.appending(path: $0) },
+        media: $0.segment.media)
+    }
   }
 
   nonisolated static func mergeMeetingSummaries(
@@ -920,7 +953,9 @@ final class AppModel {
   }
 
   var archiveSubtitle: String {
-    remoteSyncEnabled ? "Saved locally · remote sync on" : "Saved locally"
+    remoteSyncEnabled
+      ? ui("Saved locally · remote sync on")
+      : ui("Saved locally")
   }
 
   var canSaveArchiveSettings: Bool {
@@ -1038,13 +1073,13 @@ final class AppModel {
     let alert = NSAlert()
     alert.messageText = "Move existing meetings?"
     alert.informativeText = """
-      \(count) finished meeting\(count == 1 ? "" : "s") remain in \
+      Finished meetings: \(count). Archive: \
       \(oldRoot.path). Move them to the new archive folder so everything \
       stays in one place?
       """
     alert.alertStyle = .informational
-    alert.addButton(withTitle: "Move Meetings")
-    alert.addButton(withTitle: "Leave Them")
+    alert.addButton(withTitle: UIStrings.text("Move Meetings"))
+    alert.addButton(withTitle: UIStrings.text("Leave Them"))
     NSApp.activate(ignoringOtherApps: true)
     guard alert.runModal() == .alertFirstButtonReturn else {
       showTransientStatus("Existing meetings stay in \(oldRoot.lastPathComponent)")
@@ -1052,7 +1087,7 @@ final class AppModel {
     }
     let moved = await store.relocateArchivedMeetings(from: oldRoot, to: newRoot)
     await refreshMeetingDay()
-    showTransientStatus("Moved \(moved) meeting\(moved == 1 ? "" : "s") to the new archive")
+    showTransientStatus("Meetings moved to the new archive: \(moved)")
   }
 
   func schedulePostMeetingHookSettingsSave() {
@@ -1132,8 +1167,8 @@ final class AppModel {
 
   func chooseLocalArchiveDirectory() {
     let panel = NSOpenPanel()
-    panel.title = "Choose meeting archive"
-    panel.prompt = "Choose"
+    panel.title = UIStrings.text("Choose meeting archive")
+    panel.prompt = UIStrings.text("Choose")
     panel.canChooseDirectories = true
     panel.canChooseFiles = false
     panel.canCreateDirectories = true
@@ -1327,8 +1362,8 @@ final class AppModel {
       do not appear as projects.
       """
     alert.alertStyle = .informational
-    alert.addButton(withTitle: "Reveal Folder")
-    alert.addButton(withTitle: "OK")
+    alert.addButton(withTitle: UIStrings.text("Reveal Folder"))
+    alert.addButton(withTitle: UIStrings.text("OK"))
     NSApp.activate(ignoringOtherApps: true)
     if alert.runModal() == .alertFirstButtonReturn {
       NSWorkspace.shared.activateFileViewerSelecting([projectFolder])
@@ -1399,7 +1434,7 @@ final class AppModel {
             "Deleted locally; archive cleanup is pending: \(error)"
         } else {
           transcriptRetentionStatusText =
-            "Deleted detailed records from \(count) expired meeting\(count == 1 ? "" : "s")."
+            "Expired meetings whose detailed records were deleted: \(count)."
         }
       }
     } catch {
@@ -1427,13 +1462,13 @@ final class AppModel {
     let alert = NSAlert()
     alert.messageText = "Delete meeting audio?"
     alert.informativeText = """
-      Removes \(ByteCountFormatter.string(fromByteCount: finishedAudioBytes, countStyle: .file)) \
+      Removes \(UIStrings.bytes(finishedAudioBytes)) \
       of finished-meeting audio from this Mac and the synced archive. Notes and \
       transcripts are kept.\(recoveryNote) This cannot be undone.
       """
     alert.alertStyle = .warning
-    alert.addButton(withTitle: "Delete Audio")
-    alert.addButton(withTitle: "Cancel")
+    alert.addButton(withTitle: UIStrings.text("Delete Audio"))
+    alert.addButton(withTitle: UIStrings.text("Cancel"))
     NSApp.activate(ignoringOtherApps: true)
     guard alert.runModal() == .alertFirstButtonReturn else { return }
     cleanUpAudioFiles()
@@ -1452,15 +1487,14 @@ final class AppModel {
       storageUsage = refreshedUsage
       audioCleanupInProgress = false
       if freed > 0 {
-        let formatted = ByteCountFormatter.string(fromByteCount: freed, countStyle: .file)
+        let formatted = UIStrings.bytes(freed)
         if let error = await remoteSync.lastError {
           audioCleanupStatusText = "Freed \(formatted); archive cleanup is pending: \(error)"
         } else {
           audioCleanupStatusText = "Freed \(formatted)."
         }
       } else if refreshedUsage.recoveryAudioBytes > 0 {
-        let recovery = ByteCountFormatter.string(
-          fromByteCount: refreshedUsage.recoveryAudioBytes, countStyle: .file)
+        let recovery = UIStrings.bytes(refreshedUsage.recoveryAudioBytes)
         audioCleanupStatusText =
           "No finished-meeting audio to remove. \(recovery) of recovery audio is kept for unfinished captures."
       } else {
@@ -1852,6 +1886,7 @@ final class AppModel {
     // courtesy delay. Its audio is already safely stored, so finish it now.
     stoppedMeetingGracePeriods.removeAll()
     lifelog.meetingCaptureWillStart()
+    await lifelog.waitForCaptureClose()
     state = .starting
     statusText = "Requesting access…"
     do {

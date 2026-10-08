@@ -1,4 +1,5 @@
 import Foundation
+import CoreMedia
 
 /// A monotonic, pause-aware clock shared by every capture source.
 ///
@@ -47,6 +48,18 @@ final class CaptureClock: @unchecked Sendable {
     lock.withLock {
       elapsedLocked(at: pausedUptime ?? ProcessInfo.processInfo.systemUptime)
     }
+  }
+
+  /// Convert source host timestamps to the shared segment origin. Callback
+  /// queue latency must not be mistaken for silence or shift screen replay.
+  func elapsed(atHostSeconds seconds: Double) -> TimeInterval {
+    guard seconds.isFinite else { return elapsed }
+    let hostNow = CMClockGetTime(CMClockGetHostTimeClock()).seconds
+    return max(0, elapsed - max(0, hostNow - seconds))
+  }
+
+  func samplePosition(atHostSeconds seconds: Double) -> Int {
+    Int((elapsed(atHostSeconds: seconds) * Double(WavFile.sampleRate)).rounded())
   }
 
   var samplePosition: Int { Int((elapsed * Double(WavFile.sampleRate)).rounded()) }

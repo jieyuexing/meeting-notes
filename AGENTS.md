@@ -45,6 +45,27 @@
   the clone's app bundle), never against the running canonical app. Set TMPDIR/TMP/TEMP
   to the root task `.local/tmp/lifelog-24h/tmp`; document platform test-runner temp overrides.
 
+- Unified daily recording, display gate, T3 evidence, Today selection or UI language:
+  `swift test --disable-automatic-resolution -Xswiftc -warnings-as-errors`,
+  `PYTHONDONTWRITEBYTECODE=1 python3 Tests/test_transcription_lock.py`, and
+  `PYTHONDONTWRITEBYTECODE=1 python3 Tests/test_ui_localization.py`
+  → `FORK.md` “统一日常记录、Today 与完整 UI 本地化”. For these tests set
+  `MEETING_NOTES_TEST_TMPDIR`, `TMPDIR`, `TMP`, `TEMP` to the root task directory;
+  SwiftPM's test runner may override TMPDIR, so the explicit test variable is required.
+  Keep the primary start/stop independent of meeting title. Unified media closes
+  before ASR; both WAVs use the existing local-only final-engine lock. Screen files
+  have a separate subroot and a capacity pause, never automatic deletion. T3 polls
+  local `t3ctl m3max observe` without an agent/model loop and fails independently.
+  Selection outputs live under `selections/<id>/`, reference final transcripts,
+  and use only the configured daily-digest command; no second ASR or cloud fallback.
+  User confirmed requests/final replies plus title/status, and all awake displays.
+  `UILanguage` affects chrome only; preserve body text, model/command/protocol values.
+  Build with `scripts/build-app.sh` only in a frozen task APFS clone. Then supply
+  `MEETING_NOTES_LOCALIZATION_APP=/absolute/clone/Meeting Notes.app` to the Python
+  localization test to exercise Foundation Bundle lookup; do not launch the app.
+  Integration evidence: root `.local/tmp/lifelog-unified-capture/INTEGRATE-RECORD.md`.
+  No deployment or restart during the 2026-10-08/09 24-hour experiment.
+
 - MEET-4 read/write failures or root switching (R1–R3): run the strict Swift suite
   above and `PYTHONDONTWRITEBYTECODE=1 python3 Tests/test_transcription_lock.py`
   → `FORK.md` “MEET-4 常开模式”, root task `FIXES.md`. Never treat a read/repair

@@ -1,0 +1,5 @@
+"CFBundleDisplayName" = "会议笔记";
+"CFBundleName" = "会议笔记";
+"NSCalendarsFullAccessUsageDescription" = "会议笔记使用日历建议当前会议标题。";
+"NSMicrophoneUsageDescription" = "会议笔记录制麦克风音频以生成逐字稿。";
+"NSScreenCaptureUsageDescription" = "日常记录开启时，会议笔记录制亮着的显示器以供回看，并采集系统音频进行转写。单独会议也会采集系统音频。";

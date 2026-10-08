@@ -224,7 +224,7 @@ import Testing
   #expect(
     MeetingNotesLanguage.chineseSimplified.processingInstruction
       == "Write every generated text field in Chinese (Simplified), regardless of the transcript language.")
-  let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let directory = TestTemporary.root.appending(path: UUID().uuidString)
   try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
   defer { try? FileManager.default.removeItem(at: directory) }
   let captured = directory.appending(path: "prompt.txt")
@@ -237,7 +237,7 @@ import Testing
 }
 
 @Test func translatedTranscriptFollowsRenameRetranscriptionAndRetention() async throws {
-  let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let root = TestTemporary.root.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let sync = RemoteSyncService(configuration: .init(host: "", path: "", enabled: false))
   let store = MeetingStore(root: root, sync: sync)
@@ -330,7 +330,7 @@ import Testing
 }
 
 @Test func translatedTranscriptSurvivesTheDeletingArchiveMirror() async throws {
-  let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  let base = TestTemporary.root.appending(path: UUID().uuidString)
   let spool = base.appending(path: "spool")
   let archive = base.appending(path: "archive")
   defer { try? FileManager.default.removeItem(at: base) }

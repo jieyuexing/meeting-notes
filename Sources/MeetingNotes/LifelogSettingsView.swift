@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// Fork: Settings → Always-on. The only status surface of always-on mode;
-/// the menu bar keeps showing meeting state.
+/// Daily recording settings; the menu provides the primary start/stop action.
 struct LifelogSettingsPane: View {
   @Bindable var lifelog: LifelogController
+  @Environment(\.locale) private var locale
   @State private var draft = LifelogSettings()
   @State private var rootDraft = ""
   @State private var loaded = false
@@ -12,77 +12,89 @@ struct LifelogSettingsPane: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 16) {
         VStack(alignment: .leading, spacing: 5) {
-          Text("Always-on")
+          Text(UIStrings.text("Always-on"))
             .font(.title2.weight(.semibold))
-          Text("Records the microphone continuously in segments, keeps on-device transcripts only, and writes one digest per day.")
+          Text(UIStrings.text("Record screen, microphone and system sound while a display is awake. T3 task evidence continues in the background. Review a time range later without recording it again."))
             .font(.callout)
             .foregroundStyle(.secondary)
         }
 
         Divider()
 
-        Toggle("Record continuously", isOn: Binding(
+        Toggle(UIStrings.text("Record continuously"), isOn: Binding(
           get: { lifelog.settings.enabled },
           set: { enabled in Task { await lifelog.setEnabled(enabled) } }))
+        Toggle(UIStrings.text("Screen and system audio"), isOn: $draft.unifiedMedia)
+        Toggle(UIStrings.text("All awake displays"), isOn: $draft.allDisplays)
+          .disabled(!draft.unifiedMedia)
+        Stepper(UIStrings.text("Screen limit: \(draft.screenCapacityGB) GB"), value: $draft.screenCapacityGB, in: 1...1000)
+        Text(UIStrings.text("Screen files are kept even without speech. At the limit, media recording pauses; nothing is automatically deleted."))
+          .font(.caption).foregroundStyle(.secondary)
+        Text(UIStrings.text("Screen space used: \(UIStrings.bytes(lifelog.screenBytes))"))
+        Toggle(UIStrings.text("Collect T3 task evidence"), isOn: $draft.t3Enabled)
+        Toggle(UIStrings.text("Keep T3 requests and final replies"), isOn: $draft.t3IncludeText)
+        TextField(UIStrings.text("t3ctl executable"), text: $draft.t3ctlPath)
+        Text(UIStrings.text("T3 activity shows time overlap, not human focus. Service failures are independent of media recording."))
+          .font(.caption).foregroundStyle(.secondary)
         statusSection
 
         Divider()
 
-        Text("Segments")
+        Text(UIStrings.text("Segments"))
           .font(.headline)
         Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
           GridRow {
-            Text("Folder")
+            Text(UIStrings.text("Folder"))
               .gridColumnAlignment(.trailing)
             // Commits on Return only; changing roots requires stopped, drained capture.
             TextField(LifelogSettings.defaultRootPath, text: $rootDraft)
               .onSubmit { draft.rootPath = rootDraft }
           }
           GridRow {
-            Text("End after silence")
+            Text(UIStrings.text("End after silence"))
             Stepper(
-              "\(minutes(draft.silenceThreshold)) min", value: $draft.silenceThreshold,
+              UIStrings.text("\(minutes(draft.silenceThreshold)) min"), value: $draft.silenceThreshold,
               in: LifelogSettings.silenceRange, step: 30)
           }
           GridRow {
-            Text("Longest segment")
+            Text(UIStrings.text("Longest segment"))
             Stepper(
-              "\(minutes(draft.maximumSegmentDuration)) min", value: $draft.maximumSegmentDuration,
+              UIStrings.text("\(minutes(draft.maximumSegmentDuration)) min"), value: $draft.maximumSegmentDuration,
               in: LifelogSettings.maximumSegmentRange, step: 300)
           }
         }
-        Text("Microphone only, using the device chosen under Microphone. Each segment is transcribed with the final engine under Transcriptions (SenseVoice recommended; OpenAI is refused), and its audio follows the Storage retention setting. No live preview, per-segment notes, translation, sync or hooks. Recording a meeting pauses always-on capture until the meeting ends.")
+        Text(UIStrings.text("Audio uses the selected microphone and local final transcription engine. Locks, display sleep and session changes pause media; T3 observation continues. Separate meeting capture temporarily takes over. Audio retention does not delete screen files. Screen capture is a replay reference, not visual recognition."))
           .font(.caption)
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
 
         Divider()
 
-        Text("Daily digest")
+        Text(UIStrings.text("Daily digest"))
           .font(.headline)
-        Picker("Digest backend", selection: $draft.digestBackend) {
-          ForEach(LifelogDigestBackend.allCases) { Text($0.label).tag($0) }
+        Picker(UIStrings.text("Digest backend"), selection: $draft.digestBackend) {
+          ForEach(LifelogDigestBackend.allCases) { Text(UIStrings.resolve($0.label)).tag($0) }
         }
         if draft.digestBackend == .command {
-          TextField("Shell command; leave empty for no digest", text: $draft.digestCommand, axis: .vertical)
+          TextField(UIStrings.text("Shell command; leave empty for no digest"), text: $draft.digestCommand, axis: .vertical)
             .textFieldStyle(.roundedBorder)
             .font(.system(.body, design: .monospaced))
         }
-        DatePicker("Daily at", selection: digestTime, displayedComponents: .hourAndMinute)
+        DatePicker(UIStrings.text("Daily at"), selection: digestTime, displayedComponents: .hourAndMinute)
         HStack {
-          Button(lifelog.digestRunning ? "Generating…" : "Generate today's digest now") {
+          Button(UIStrings.resolve(lifelog.digestRunning ? "Generating…" : "Generate today's digest now")) {
             Task { await lifelog.generateDigest(day: lifelog.store.dayKey(Date())) }
           }
           .disabled(lifelog.digestRunning || draft.digestBackendSettings == nil)
           if lifelog.digestRunning { ProgressView().controlSize(.small) }
         }
         if !lifelog.digestStatusText.isEmpty {
-          Text(lifelog.digestStatusText)
+          Text(UIStrings.resolve(lifelog.digestStatusText))
             .font(.caption)
             .foregroundStyle(.secondary)
             .textSelection(.enabled)
         }
-        Text("Writes digest/YYYY-MM-DD.md in the folder above. A custom command follows the summary contract: the prompt and JSON schema arrive on stdin, the JSON object goes to stdout. A segment belongs to the day it started; segments finished after the digest time are added once the next day.")
+        Text(UIStrings.text("Writes digest/YYYY-MM-DD.md in the folder above. A custom command follows the summary contract: the prompt and JSON schema arrive on stdin, the JSON object goes to stdout. A segment belongs to the day it started; segments finished after the digest time are added once the next day."))
           .font(.caption)
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
@@ -114,18 +126,18 @@ struct LifelogSettingsPane: View {
   private var statusSection: some View {
     let stats = lifelog.todayStats
     VStack(alignment: .leading, spacing: 4) {
-      Text(lifelog.statusText)
+      Text(lifelog.statusText(language: UILanguage.displayed(for: locale)))
       if lifelog.phase == .recording, let started = lifelog.segmentStartedAt {
-        Text("Current segment since \(started.formatted(date: .omitted, time: .standard))")
+        Text(UIStrings.text("Current segment since \(started.formatted(.dateTime.hour().minute().second().locale(locale)))"))
           .foregroundStyle(.secondary)
       }
       Text(
-        "Today: \(stats.completeSegments) transcribed · \(stats.failedSegments) failed · \(stats.pendingSegments) waiting · \(stats.emptySegments) without speech · \(stats.silentSegmentsDiscarded) silent · \(stats.characters) characters"
+        UIStrings.text("Today: \(stats.completeSegments) transcribed · \(stats.failedSegments) failed · \(stats.pendingSegments) waiting · \(stats.emptySegments) without speech · \(stats.silentSegmentsDiscarded) silent · \(stats.characters) characters")
       )
       .foregroundStyle(.secondary)
-      Button("Retry failed transcripts (all days)") { lifelog.retryFailedSegments() }
+      Button(UIStrings.text("Retry failed transcripts (all days)")) { lifelog.retryFailedSegments() }
       if let error = lifelog.lastError {
-        Text(error)
+        Text(UIStrings.resolve(error))
           .foregroundStyle(.orange)
           .textSelection(.enabled)
       }

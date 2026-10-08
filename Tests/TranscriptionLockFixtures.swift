@@ -72,6 +72,9 @@ enum FillerWordSettingsStore { static func load() -> Bool { false } }
 enum FillerWordFilter { static func apply(to turns: [TranscriptTurn]) -> [TranscriptTurn] { turns } }
 enum WavFile {
   static func checkedMeaningfulSignal(at url: URL) throws -> Bool {
+    if url.lastPathComponent == "system.wav", ProcessInfo.processInfo.environment["FIXTURE_SYSTEM_READ_ERROR"] == "1" {
+      throw CocoaError(.fileReadNoPermission)
+    }
     if ProcessInfo.processInfo.environment["FIXTURE_STRICT_READ_ONCE"] == "1" {
       let marker = url.deletingLastPathComponent().appending(path: "read-failed-once")
       if !FileManager.default.fileExists(atPath: marker.path) {

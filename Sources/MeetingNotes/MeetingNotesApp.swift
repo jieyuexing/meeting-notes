@@ -33,6 +33,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     userDriverDelegate: nil
   )
 
+  func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    Self.sharedModel.lifelog.shutdown()
+    Task { @MainActor in
+      await Self.sharedModel.lifelog.waitForCaptureClose()
+      await Self.sharedModel.lifelog.waitForT3Stop()
+      sender.reply(toApplicationShouldTerminate: true)
+    }
+    return .terminateLater
+  }
+
   func checkForUpdates() {
     updaterController.checkForUpdates(nil)
   }
@@ -57,8 +67,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       will appear.
       """
     alert.alertStyle = .informational
-    alert.addButton(withTitle: "OK")
+    alert.addButton(withTitle: UIStrings.text("OK"))
     NSApp.activate(ignoringOtherApps: true)
+    alert.messageText = UIStrings.resolve(alert.messageText)
+    alert.informativeText = UIStrings.resolve(alert.informativeText)
     alert.runModal()
   }
 
@@ -176,14 +188,16 @@ struct MeetingNotesApp: App {
   var body: some Scene {
     MenuBarExtra {
       MenuBarView(model: model)
+        .environment(\.locale, model.uiLanguage.locale)
     } label: {
       Image(systemName: menuBarIcon)
-        .accessibilityLabel(menuBarAccessibilityLabel)
+        .accessibilityLabel(UIStrings.resolve(menuBarAccessibilityLabel))
     }
     .menuBarExtraStyle(.window)
 
     Settings {
       SettingsView(model: model)
+        .environment(\.locale, model.uiLanguage.locale)
     }
     .defaultSize(width: 860, height: 640)
     .windowResizability(.contentMinSize)
@@ -196,7 +210,7 @@ struct MeetingNotesApp: App {
     case .processing: "waveform"
     case .starting: "ellipsis"
     case .failed: "exclamationmark.triangle.fill"
-    case .idle: "waveform"
+    case .idle: model.lifelog.phase == .recording ? "waveform.and.mic" : "waveform"
     }
   }
 
@@ -207,7 +221,7 @@ struct MeetingNotesApp: App {
     case .processing: "Meeting Notes, processing"
     case .starting: "Meeting Notes, starting"
     case .failed: "Meeting Notes, needs attention"
-    case .idle: "Meeting Notes, ready"
+    case .idle: model.lifelog.phase == .recording ? "Meeting Notes, recording" : "Meeting Notes, ready"
     }
   }
 }

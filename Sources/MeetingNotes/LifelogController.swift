@@ -22,6 +22,7 @@ final class LifelogController {
     case recording
     case yieldingToMeeting
     case sleeping
+    case displayPaused
     /// Capture could not start or its file writer failed.
     case retrying(String)
     /// A setting prevents recording until the user changes it.
@@ -49,6 +50,24 @@ final class LifelogController {
   private(set) var digestRunning = false
 
   private let defaults: UserDefaults
+  private let unified: (any UnifiedSegmentCapturing)?
+  private var displayCheckTask: Task<Void, Never>?
+  private var capturedDisplayIDs: [UInt32] = []
+  private var t3Epoch = 0
+  private let displayGate: DisplayCaptureGate
+  private var closingTask: Task<Void, Never>?
+  private var mediaStartTask: Task<Void, Error>?
+  private var starting = false
+  private var captureEpoch = 0
+  private(set) var screenBytes: Int64 = 0
+  private(set) var t3Snapshot = T3ActivityCollector.Snapshot(enabledAt: Date())
+  private(set) var t3State: T3ActivityCollector.State = .stopped
+  private var t3Collector: T3ActivityCollector?
+  private var t3ConfigurationKey = ""
+  private var t3ShutdownTask: Task<Void, Never>?
+  private var t3UpdateTask: Task<Void, Never>?
+  private var distributedObservers: [NSObjectProtocol] = []
+  private var usesUnified: Bool { settings.unifiedMedia && unified != nil }
   private let capture: LifelogCapture
   private let transcribe: Transcribe
   private let requestAccess: @Sendable () async -> Bool
@@ -74,6 +93,8 @@ final class LifelogController {
   init(
     defaults: UserDefaults = .standard,
     capture: LifelogCapture = LifelogRecorder(),
+    unified: (any UnifiedSegmentCapturing)? = nil,
+    displayGate: DisplayCaptureGate = DisplayCaptureGate(),
     transcribe: @escaping Transcribe,
     requestAccess: @escaping @Sendable () async -> Bool = {
       await AVCaptureDevice.requestAccess(for: .audio)
@@ -94,6 +115,8 @@ final class LifelogController {
   ) {
     self.defaults = defaults
     self.capture = capture
+    self.unified = unified
+    self.displayGate = displayGate
     self.transcribe = transcribe
     self.requestAccess = requestAccess
     self.transcriptionBlocker = transcriptionBlocker
@@ -103,8 +126,22 @@ final class LifelogController {
     self.calendar = calendar
     self.notesLanguage = notesLanguage
     settings = LifelogSettingsStore.load(from: defaults)
+    if unified != nil, let cached = T3ActivityCollector.cachedSnapshot(root: settings.rootURL, includeText: settings.t3IncludeText) {
+      t3Snapshot = cached
+    }
     let activity = activity
     capture.onSamples = { samples in activity.observe(samples, at: now()) }
+    unified?.onSamples = { samples in activity.observe(samples, at: now()) }
+    unified?.onFailure = { [weak self] root, error in
+      Task { @MainActor in
+        guard let self, let current = self.current,
+          current.segment.screenRelativeFolder.map({ self.store.root.appending(path: $0) }) == root else { return }
+        self.lastError = error
+        self.endSegment(reason: .stopped, restart: false, mediaFailure: error)
+        self.phase = .retrying(error)
+        self.nextRetryAt = now() + Self.retryInterval
+      }
+    }
     capture.onWriteFailure = { [weak self] url, error in
       Task { @MainActor in self?.handleWriteFailure(at: url, error: error) }
     }
@@ -116,13 +153,19 @@ final class LifelogController {
   var store: LifelogStore { LifelogStore(root: settings.rootURL, calendar: calendar) }
 
   var statusText: String {
-    switch phase {
-    case .off: "Off"
-    case .recording: "Recording · Mac stays awake"
-    case .yieldingToMeeting: "Paused while a meeting is recorded"
-    case .sleeping: "Paused while the Mac sleeps"
-    case .retrying(let reason): "Waiting to retry capture: \(reason)"
-    case .blocked(let reason): reason
+    statusText(language: .system)
+  }
+
+  func statusText(language: UILanguage) -> String {
+    func ui(_ key: String) -> String { UIStrings.string(key, language: language) }
+    return switch phase {
+    case .off: ui("Off")
+    case .recording: ui("Recording · Mac stays awake")
+    case .yieldingToMeeting: ui("Paused while a meeting is recorded")
+    case .sleeping: ui("Paused while the Mac sleeps")
+    case .displayPaused: ui("Paused · unlock and wake a display to record")
+    case .retrying(let reason): String(format: ui("Waiting to retry capture: %@"), UIStrings.resolve(reason, language: language))
+    case .blocked(let reason): UIStrings.resolve(reason, language: language)
     }
   }
 
@@ -146,15 +189,42 @@ final class LifelogController {
       observers.append(NotificationCenter.default.addObserver(
         forName: NSApplication.willTerminateNotification, object: nil, queue: .main
       ) { [weak self] _ in MainActor.assumeIsolated { self?.shutdown() } })
+      for name in [NSWorkspace.screensDidSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
+        observers.append(notifications.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+          MainActor.assumeIsolated { self?.pauseDisplays(session: name == NSWorkspace.sessionDidResignActiveNotification) }
+        })
+      }
+      for name in [NSWorkspace.screensDidWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
+        observers.append(notifications.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+          Task { @MainActor in await self?.resumeDisplays(session: name == NSWorkspace.sessionDidBecomeActiveNotification) }
+        })
+      }
+      // macOS has no public lock-specific notification. Keep these defensive
+      // signals separate from the documented session/screen sleep API.
+      let distributed = DistributedNotificationCenter.default()
+      for (name, locked) in [("com.apple.screenIsLocked", true), ("com.apple.screenIsUnlocked", false)] {
+        distributedObservers.append(distributed.addObserver(forName: Notification.Name(name), object: nil, queue: .main) { [weak self] _ in
+          Task { @MainActor in
+            if locked { self?.pauseDisplays(session: true) }
+            else { await self?.resumeDisplays(session: true) }
+          }
+        })
+      }
       startLoop()
     }
     refreshStats()
-    if settings.enabled { startInBackground() }
+    if settings.enabled {
+      if settings.enabledAt == nil { settings.enabledAt = now(); LifelogSettingsStore.save(settings, to: defaults) }
+      startInBackground()
+    }
+    Task { await updateT3() }
   }
 
   func setEnabled(_ enabled: Bool) async {
+    if enabled, !settings.enabled || settings.enabledAt == nil { settings.enabledAt = now() }
     settings.enabled = enabled
     LifelogSettingsStore.save(settings, to: defaults)
+    await updateT3()
     if enabled {
       await startCapturing()
     } else {
@@ -175,7 +245,7 @@ final class LifelogController {
     if changingRoot {
       do {
         // Include current/start and the in-flight queue task, not just the queued URLs.
-        guard current == nil, startTask == nil, queueTask == nil, queue.isEmpty,
+        guard !settings.enabled, !starting, closingTask == nil, current == nil, startTask == nil, queueTask == nil, queue.isEmpty,
           try !store.hasUnfinishedSegments() else {
           lastError = "Stop recording and drain pending/failed segments before changing the archive root."
           return
@@ -186,6 +256,12 @@ final class LifelogController {
       }
     }
     if changingRoot { lastError = nil }
+    if previous.unifiedMedia != updated.unifiedMedia || previous.allDisplays != updated.allDisplays {
+      endSegment(reason: .stopped, restart: false)
+      await waitForCaptureClose()
+    }
+    var updated = updated
+    updated.enabledAt = settings.enabledAt
     settings = updated
     LifelogSettingsStore.save(updated, to: defaults)
     if changingRoot {
@@ -194,10 +270,13 @@ final class LifelogController {
     await setEnabled(updated.enabled)
   }
 
-  /// Synchronous close on normal application termination. Pending WAVs are
-  /// durable; the next launch drains them. No asynchronous work is required to quit.
+  /// Stop admission immediately. The app delegate awaits media and T3 cleanup;
+  /// pending transcripts are recovered on next launch without waiting for ASR.
   func shutdown() {
     shuttingDown = true
+    t3UpdateTask?.cancel()
+    if t3ShutdownTask == nil { t3ShutdownTask = Task { await t3Collector?.stop() } }
+    displayCheckTask?.cancel()
     loopTask?.cancel()
     startTask?.cancel()
     nextRetryAt = nil
@@ -233,12 +312,14 @@ final class LifelogController {
   /// so sleep closes the segment and wake starts a fresh one.
   func systemWillSleep() {
     asleep = true
+    displayGate.systemWillSleep()
     endSegment(reason: .sleep, restart: false)
     if settings.enabled, !meetingActive { phase = .sleeping }
   }
 
   func systemDidWake() async {
     asleep = false
+    displayGate.systemDidWake()
     guard settings.enabled, !meetingActive else { return }
     await startCapturing()
   }
@@ -253,6 +334,35 @@ final class LifelogController {
       return
     }
     let time = now()
+    if usesUnified, current != nil {
+      if displayCheckTask == nil {
+        let epoch = captureEpoch
+        displayCheckTask = Task { [weak self] in
+          guard let self else { return }
+          defer { self.displayCheckTask = nil }
+          let state = await self.displayGate.recheck()
+          guard epoch == self.captureEpoch, self.current != nil, !Task.isCancelled else { return }
+          if state != .ready {
+            self.endSegment(reason: .sleep, restart: false)
+            self.phase = .displayPaused
+          } else if self.settings.allDisplays && self.capturedDisplayIDs != self.displayGate.awakeDisplayIDs {
+            self.endSegment(reason: .deviceChange, restart: true)
+          }
+        }
+      }
+      do {
+        screenBytes = try screenStorageBytes()
+        if screenBytes >= Int64(settings.screenCapacityGB) * 1_000_000_000 {
+          endSegment(reason: .stopped, restart: false)
+          phase = .blocked("Screen storage limit reached. Increase the limit or move recordings manually.")
+          return
+        }
+      } catch {
+        endSegment(reason: .stopped, restart: false)
+        phase = .blocked("Cannot inspect screen storage: " + error.localizedDescription)
+        return
+      }
+    }
     switch phase {
     case .recording:
       guard let current else { return }
@@ -269,6 +379,8 @@ final class LifelogController {
       case .cut(let reason): endSegment(reason: reason, restart: true)
       case .discardSilence: endSegment(reason: .silence, restart: true)
       }
+    case .displayPaused:
+      if startTask == nil { startInBackground() }
     case .retrying:
       guard let nextRetryAt, time >= nextRetryAt, startTask == nil else { return }
       self.nextRetryAt = nil
@@ -339,6 +451,7 @@ final class LifelogController {
   }
 
   func waitForTranscriptions() async {
+    await waitForCaptureClose()
     while let queueTask { await queueTask.value }
   }
 
@@ -364,30 +477,56 @@ final class LifelogController {
   }
 
   private func startCapturing() async {
+    guard !starting else { return }
+    starting = true
+    defer { starting = false }
+    await waitForCaptureClose()
+    captureEpoch += 1
+    let epoch = captureEpoch
     switch await startCheck() {
     case .skip: return
-    case .blocked(let reason):
-      phase = .blocked(reason)
-      return
+    case .blocked(let reason): phase = .blocked(reason); return
     case .go: break
     }
+    guard epoch == captureEpoch else { return }
     do {
       let started = now()
-      let created = try store.createSegment(id: UUID(), startedAt: started)
-      do {
-        try capture.start(
-          writingTo: store.audioURL(in: created.folder),
-          preferredDeviceUID: MicrophoneSettingsStore.preferredDeviceUID(from: defaults))
-      } catch {
-        try? FileManager.default.removeItem(at: created.folder)
-        throw error
+      var created = try store.createSegment(id: UUID(), startedAt: started)
+      let clock = CaptureClock()
+      clock.start()
+      if usesUnified {
+        created.segment.screenRelativeFolder = "screen/\(store.dayKey(started))/\(created.segment.id.uuidString.lowercased())"
+        try store.save(created.segment, in: created.folder)
       }
       current = created
+      capture.align(to: clock)
+      try capture.start(writingTo: store.audioURL(in: created.folder),
+        preferredDeviceUID: MicrophoneSettingsStore.preferredDeviceUID(from: defaults))
+      if let relative = created.segment.screenRelativeFolder, let unified {
+        let segment = UnifiedCaptureSegment(root: store.root.appending(path: relative), startedAt: started,
+          displayPolicy: settings.allDisplays ? .allDisplays : .mainDisplay,
+          systemAudioURL: store.systemAudioURL(in: created.folder))
+        let task = Task {
+          guard epoch == self.captureEpoch else { throw CancellationError() }
+          try await unified.start(segment: segment, clock: clock)
+        }
+        mediaStartTask = task
+        do { try await task.value } catch {
+          mediaStartTask = nil
+          if epoch == captureEpoch { throw error }
+          return
+        }
+        mediaStartTask = nil
+      }
+      guard epoch == captureEpoch, current?.folder == created.folder else { return }
       segmentStartedAt = started
       nextRetryAt = nil
       phase = .recording
       wakeLock.acquire()
     } catch {
+      // Preserve partially opened files; a permission or encoder failure is
+      // never represented as silence and never queues unfinished writers.
+      endSegment(reason: .stopped, restart: false, mediaFailure: error.localizedDescription)
       phase = .retrying(error.localizedDescription)
       nextRetryAt = now() + Self.retryInterval
     }
@@ -400,6 +539,16 @@ final class LifelogController {
       return .blocked(error)
     }
     if let blocker = transcriptionBlocker() { return .blocked(blocker) }
+    if usesUnified {
+      guard await displayGate.recheck() == .ready else { phase = .displayPaused; return .skip }
+      capturedDisplayIDs = displayGate.awakeDisplayIDs
+      do {
+        screenBytes = try screenStorageBytes()
+        if screenBytes >= Int64(settings.screenCapacityGB) * 1_000_000_000 {
+          return .blocked("Screen storage limit reached. Increase the limit or move recordings manually.")
+        }
+      } catch { return .blocked("Cannot inspect screen storage: " + error.localizedDescription) }
+    }
     guard await requestAccess() else { return .blocked("Microphone access was denied.") }
     // Settings, a meeting or sleep may have changed while access was pending.
     return settingsAllowCapture() ? .go : .skip
@@ -427,8 +576,14 @@ final class LifelogController {
 
   /// Closes the current segment. `restart` rotates into a new file without
   /// stopping the engine, so rotation does not intentionally restart capture. OS scheduling and device gaps are unbounded.
-  private func endSegment(reason: LifelogCutReason, restart: Bool) {
+  private func endSegment(reason: LifelogCutReason, restart: Bool, mediaFailure: String? = nil) {
+    captureEpoch += 1
+    unified?.suspendImmediately()
     guard let closing = current else { return }
+    if closing.segment.screenRelativeFolder != nil {
+      closeUnified(closing, reason: reason, restart: restart, failure: mediaFailure)
+      return
+    }
     let store = LifelogStore(root: closing.folder.deletingLastPathComponent().deletingLastPathComponent(), calendar: calendar)
     let ended = now()
     var next: (segment: LifelogSegment, folder: URL)?
@@ -478,6 +633,121 @@ final class LifelogController {
       try? store.markFailed(segment, in: closing.folder, error: error, startedAt: ended)
     }
     refreshStats()
+  }
+
+  func waitForT3Stop() async { await t3ShutdownTask?.value }
+
+  func waitForCaptureClose() async {
+    while let closingTask { await closingTask.value }
+  }
+
+  private func closeUnified(_ closing: (segment: LifelogSegment, folder: URL),
+    reason: LifelogCutReason, restart: Bool, failure: String?) {
+    current = nil
+    segmentStartedAt = nil
+    wakeLock.release()
+    let ended = now()
+    var audioResult: LifelogCaptureResult?
+    var closeError = failure
+    do { audioResult = try capture.stop() } catch { closeError = closeError ?? error.localizedDescription }
+    let start = mediaStartTask
+    let rootStore = store
+    // Admission and mic close have already happened synchronously above.
+    // No replacement generation can start until this task has drained.
+    closingTask = Task {
+      do { try await start?.value } catch { closeError = closeError ?? "Capture interrupted during start: " + error.localizedDescription }
+      var segment = closing.segment
+      segment.endedAt = ended
+      segment.closeReason = reason
+      segment.audioSeconds = audioResult?.seconds ?? ended.timeIntervalSince(segment.startedAt)
+      do {
+        segment.media = try await unified?.stop()
+        let error = closeError ?? audioResult?.writeError ?? segment.media?.failure
+        if let error {
+          segment.status = .failed; segment.error = error
+          lastError = error
+          try rootStore.save(segment, in: closing.folder)
+        } else {
+          // Keep even a silent desktop segment: screen artifacts have their
+          // own root and never enter discardSilentSegment.
+          segment.status = .pending
+          try rootStore.save(segment, in: closing.folder)
+          if !shuttingDown { enqueue(closing.folder) }
+        }
+      } catch {
+        lastError = error.localizedDescription
+        try? rootStore.markFailed(segment, in: closing.folder, error: error, startedAt: ended)
+      }
+      closingTask = nil
+      refreshStats()
+      if restart, !shuttingDown { startInBackground() }
+    }
+  }
+
+  func pauseDisplays(session: Bool = false) {
+    if session { displayGate.sessionDidResignActive() } else { displayGate.screensDidSleep() }
+    guard usesUnified else { return }
+    endSegment(reason: .sleep, restart: false)
+    if settings.enabled, !meetingActive { phase = .displayPaused }
+  }
+
+  func resumeDisplays(session: Bool = false) async {
+    if session { displayGate.sessionDidBecomeActive() } else { displayGate.screensDidWake() }
+    if settings.enabled { await startCapturing() }
+  }
+
+  private func screenStorageBytes() throws -> Int64 {
+    let root = store.root.appending(path: "screen")
+    guard FileManager.default.fileExists(atPath: root.path) else { return 0 }
+    var failure: Error?
+    let walker = FileManager.default.enumerator(at: root,
+      includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey],
+      errorHandler: { _, error in failure = error; return false })
+    var bytes: Int64 = 0
+    while let url = walker?.nextObject() as? URL {
+      let info = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+      if info.isRegularFile == true { bytes += Int64(info.fileSize ?? 0) }
+    }
+    if let failure { throw failure }
+    return bytes
+  }
+
+  private func updateT3() async {
+    // Only the production controller (with a media component) polls T3. Tests
+    // and historical mic-only callers cannot accidentally contact the service.
+    guard unified != nil, validateRoot() else { return }
+    t3Epoch += 1
+    let epoch = t3Epoch
+    let key = "\(settings.rootURL.path)|\(settings.t3ctlPath)|\(settings.t3IncludeText)"
+    if !settings.enabled || !settings.t3Enabled || shuttingDown || key != t3ConfigurationKey {
+      t3UpdateTask?.cancel(); t3UpdateTask = nil
+      await t3Collector?.stop()
+      guard epoch == t3Epoch else { return }
+      t3Collector = nil; t3State = .stopped
+    }
+    if key != t3ConfigurationKey {
+      t3Snapshot = T3ActivityCollector.cachedSnapshot(root: settings.rootURL, includeText: settings.t3IncludeText)
+        ?? .init(enabledAt: settings.enabledAt ?? now())
+    }
+    t3ConfigurationKey = key
+    guard t3Collector == nil else { return }
+    let collector = T3ActivityCollector(configuration: .init(root: settings.rootURL,
+      enabledAt: settings.enabledAt ?? now(), t3ctlURL: URL(fileURLWithPath: (settings.t3ctlPath as NSString).expandingTildeInPath),
+      mode: settings.t3IncludeText ? .includeText : .metadata))
+    t3Snapshot = await collector.currentSnapshot()
+    guard epoch == t3Epoch else { return }
+    guard settings.enabled, settings.t3Enabled, !shuttingDown else { return }
+    t3Collector = collector
+    await collector.start()
+    t3UpdateTask = Task { [weak self] in
+      while !Task.isCancelled {
+        let snapshot = await collector.currentSnapshot()
+        let state = await collector.state
+        guard !Task.isCancelled else { return }
+        self?.t3Snapshot = snapshot; self?.t3State = state
+        try? await Task.sleep(for: .seconds(2))
+      }
+    }
   }
 
   /// Meaningful signal at or after `start`. The monitor only answers "quiet
@@ -553,8 +823,14 @@ final class LifelogController {
       // Only a successful validated read can establish silence. The shared final
       // engine uses the throwing check again under its lock; EVERY error from
       // it propagates, so a later read failure can never become empty.
-      let turns = try WavFile.checkedMeaningfulSignal(at: audio)
-        ? try await transcribe(audio, store.systemAudioURL(in: folder)) : []
+      let system = store.systemAudioURL(in: folder)
+      if segment.closeReason == .recovered, FileManager.default.fileExists(atPath: system.path) {
+        try WavFile.repairLifelogHeader(at: system)
+      }
+      let micSignal = try WavFile.checkedMeaningfulSignal(at: audio)
+      let systemSignal = FileManager.default.fileExists(atPath: system.path)
+        ? try WavFile.checkedMeaningfulSignal(at: system) : false
+      let turns = micSignal || systemSignal ? try await transcribe(audio, system) : []
       try store.complete(
         segment, in: folder, turns: turns, transcriptionStartedAt: started, transcribedAt: now(),
         deleteAudio: !AudioRetentionSettingsStore.load(from: defaults))
@@ -570,6 +846,7 @@ final class LifelogController {
   // MARK: - Housekeeping
 
   private func startLoop() {
+    displayCheckTask?.cancel()
     loopTask?.cancel()
     loopTask = Task { [weak self] in
       var seconds = 0
@@ -597,6 +874,10 @@ final class LifelogController {
   }
 
   private func refreshStats() {
+    if unified != nil, LifelogSettings.rootError(settings.rootPath, reserved: reservedRoots()) == nil {
+      do { screenBytes = try screenStorageBytes() }
+      catch { lastError = "Cannot inspect screen storage: " + error.localizedDescription }
+    }
     let store = self.store
     let day = store.dayKey(now())
     var stats = DayStats()

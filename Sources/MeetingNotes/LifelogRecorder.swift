@@ -43,11 +43,14 @@ protocol LifelogCapture: AnyObject {
   var onWriteFailure: (@Sendable (URL, String) -> Void)? { get set }
   var isRunning: Bool { get }
   func start(writingTo url: URL, preferredDeviceUID: String?) throws
+  func align(to clock: CaptureClock)
   /// Finishes the current file and continues into `url` without an intentional engine restart: the
   /// engine keeps running and the next buffer goes to the new file.
   func rotate(to url: URL) throws -> LifelogCaptureResult
   func stop() throws -> LifelogCaptureResult?
 }
+
+extension LifelogCapture { func align(to clock: CaptureClock) {} }
 
 /// A microphone-only recorder for always-on mode. It mirrors the device and
 /// format handling of `MicrophoneRecorder.startEngine`, but owns its own
@@ -75,6 +78,10 @@ final class LifelogRecorder: LifelogCapture, @unchecked Sendable {
   private let writeData: @Sendable (FileHandle, Data) throws -> Void
   private let checkpoint: @Sendable (FileHandle, Int) throws -> Void
   private let failureQueue = DispatchQueue(label: "LifelogRecorder.write-failure")
+  private var clock: CaptureClock?
+  private var needsAlignment = false
+  func align(to clock: CaptureClock) { lock.withLock { self.clock = clock; needsAlignment = true } }
+
   private var handle: FileHandle?
   private var outputURL: URL?
   private var byteCount = 0
@@ -218,7 +225,7 @@ final class LifelogRecorder: LifelogCapture, @unchecked Sendable {
         userInfo: [NSLocalizedDescriptionKey: "No microphone input is available"])
     }
     let converter = AVAudioConverter(from: sourceFormat, to: targetFormat)
-    input.installTap(onBus: 0, bufferSize: 4096, format: sourceFormat) { [weak self] buffer, _ in
+    input.installTap(onBus: 0, bufferSize: 4096, format: sourceFormat) { [weak self] buffer, time in
       guard let self else { return }
       let converted: AVAudioPCMBuffer
       if let converter {
@@ -242,7 +249,7 @@ final class LifelogRecorder: LifelogCapture, @unchecked Sendable {
       let samples = (0..<Int(converted.frameLength)).map { index -> Int16 in
         Int16(max(-1, min(1, channel[index])) * 32767)
       }
-      self.write(samples)
+      self.write(samples, hostSeconds: time.isHostTimeValid ? AVAudioTime.seconds(forHostTime: time.hostTime) : nil)
       // The shared monitor needs >=50 ms. At high device sample rates a
       // converted tap can be shorter; accumulate instead of calling it silent.
       let observation = self.lock.withLock { () -> ([Int16], (@Sendable ([Int16]) -> Void)?) in
@@ -283,7 +290,7 @@ final class LifelogRecorder: LifelogCapture, @unchecked Sendable {
     return sampleRate
   }
 
-  func write(_ samples: [Int16]) {
+  func write(_ samples: [Int16], hostSeconds: Double? = nil) {
     let data = samples.withUnsafeBufferPointer { Data(buffer: $0) }
     var notification: (URL, String, @Sendable (URL, String) -> Void)?
     lock.lock()
@@ -295,6 +302,16 @@ final class LifelogRecorder: LifelogCapture, @unchecked Sendable {
     }
     guard writeError == nil, let handle else { return }
     do {
+      if needsAlignment, let clock {
+        // AVAudioTime is the buffer origin, independent of callback delay.
+        let missing = hostSeconds.map { clock.samplePosition(atHostSeconds: $0) }
+          ?? max(0, clock.samplePosition - samples.count)
+        if missing > 0 {
+          let silence = WavFile.silence(samples: missing)
+          try writeData(handle, silence); byteCount += silence.count
+        }
+        needsAlignment = false
+      }
       try writeData(handle, data)
       byteCount += data.count
       bytesSinceCheckpoint += data.count

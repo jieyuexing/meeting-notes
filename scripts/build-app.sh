@@ -5,7 +5,7 @@ ROOT=${0:A:h:h}
 APP="$ROOT/Meeting Notes.app"
 ARCH=$(uname -m)
 
-swift build --package-path "$ROOT" -c release
+swift build --package-path "$ROOT" --disable-automatic-resolution -c release
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 cp "$ROOT/.build/$ARCH-apple-macosx/release/MeetingNotes" "$APP/Contents/MacOS/MeetingNotes"
@@ -19,6 +19,13 @@ cp -R "$SPARKLE_FRAMEWORK" "$APP/Contents/Frameworks/Sparkle.framework"
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 cp "$ROOT/Resources/OpenAILogo.svg" "$APP/Contents/Resources/OpenAILogo.svg"
+# Keep bundle-localized UI and privacy strings in the application bundle.
+# SwiftPM tests do not exercise this copy, so the isolated package check also
+# verifies these exact lproj paths in the built .app.
+for localization in "$ROOT"/Resources/*.lproj; do
+  [[ -d "$localization" ]] || continue
+  cp -R "$localization" "$APP/Contents/Resources/"
+done
 IDENTITY=${MEETING_NOTES_CODE_SIGN_IDENTITY:--}
 
 # Sign inside-out instead of using the deprecated `codesign --deep`: nested
