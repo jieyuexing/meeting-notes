@@ -22,3 +22,11 @@
   `MEETING_NOTES_RETAINED_MODEL_DIR`, and `MEETING_NOTES_RETAINED_OUT` values. It returns
   immediately without those values, uses `preloadShared(from:)` rather than a download API, and
   writes every generated report or gain copy under the root task `.local/tmp/` directory.
+- SenseVoice final transcript (engine choice, VAD segmentation, tag cleanup, segment-level
+  timestamps) or the bilingual `transcript.<code>.md` (language detection, translation alignment,
+  archive/retention behavior): run `swift test --disable-automatic-resolution --filter senseVoice`
+  and `--filter '[Tt]ranslat'`, plus `PYTHONDONTWRITEBYTECODE=1 python3 Tests/test_transcription_lock.py`
+  after touching `FinalTranscriptionEngine`; review `FORK.md` “SenseVoice 最终转写” and
+  “转写语言与中外对照逐字稿”. Real-audio and real-backend checks use the opt-in
+  `localSenseVoiceFinalProbe` / `liveTranscriptTranslationProbe` tests (variables in `FORK.md`);
+  feed them only retained or synthetic material and write outputs under the root task `.local/tmp/`.

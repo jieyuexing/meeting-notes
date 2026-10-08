@@ -107,20 +107,57 @@ swift test --disable-automatic-resolution --filter transcriptFormatter
 它记录 raw final、token timings、旧 partial 的 appendDelta 模拟和生产 archive 边界结果。测试中不得
 固化真实录音内容。
 
+## SenseVoice 最终转写（2026-10-08）
+
+**Settings → Transcriptions → Transcription engine** 新增 **SenseVoice (on-device)**，只用于录音结束后的最终转写；实时预览仍是 Nemotron，Live 引擎列表不出现该项。默认值不变（`transcription.engine` 缺省为 `onDevice`）；`loadLive` 遇到存成 `senseVoice` 的值回退为 `onDevice`，`saveLive` 也不会写入它。
+
+- 入口：`FinalTranscriptionEngine.process` 在原有目录锁内按设置选择 `SenseVoiceTranscriber`（`SenseVoiceTranscriber.swift`）。麦克风和系统声两路分别处理，`TranscriptTurn.source` 与转写锁、取消检查语义不变。SenseVoice 非取消错误（例如首次下载时离线）回退 Nemotron，取消不回退；OpenAI 引擎的回退目标仍是 Nemotron。
+- 模型：FluidAudio 0.15.7 的 `SenseVoiceModels.downloadAndLoad(.fp16)` 与 `VadManager()`（Silero VAD），都先用 `~/Library/Application Support/FluidAudio/Models/` 本机缓存，缺失时首次从 HuggingFace 下载（SenseVoice 约 453 MB，`silero-vad` 很小）；音频不离开本机。模型加载后留在进程内，与 Nemotron 一样不主动卸载。
+- 切段：按 10 分钟块读 WAV（与 Nemotron 一样跳 44 字节头），每块跑 VAD（`maxSpeechDuration` 30 s，其余为 FluidAudio 默认）。跨块尾的语音段推迟到下一块从该段开头重读，块尾段若从块首开始则直接输出，保证前进。单段超过 90 s（低于约 108 s 的 1800 帧窗口，超出 FluidAudio 只记日志并截断）按等长强制切开。整轨 VAD 都没检测到语音时，按 ≤90 s 固定窗口整轨识别，避免安静但有效的音轨被丢掉。
+- 时间戳：SenseVoice 不出时间戳，每个 VAD 段（或强制切片）生成一个 turn，起止为段边界，精度是**切段级**，比 Nemotron 的词元级粗。送入模型的音频在段两侧各多带最多 0.4 s 上下文，且不超过与相邻段间隙的一半（强制切片之间为 0），所以不会重复识别同一语音；turn 时间仍取 VAD 段边界。
+- 文本：`language = 0`（自动识别）、`textNorm = 14`（withitn）。理由：对比实测 withitn 与 woitn 的差异只有阿拉伯数字格式（数字归一后同为 0/52），而 withitn 带标点，逐字稿合并断句、摘要和翻译输入都更好读。`SenseVoiceText.clean` 防御性去掉 `<|…|>` 语言/情绪/事件/ITN 标签与 `▁`，合并空白，删除中日文字之间及其与数字之间的空格（日文 ITN 会输出“午後 3 時”），保留韩文与拉丁文词间空格。`VocabularyTextCorrector` 逐段应用（跨两个 VAD 段的替换不生效，段间是静音）；`FillerWordFilter` 仍在 `FinalTranscriptionEngine` 对合并后的 turns 应用。`FinalTranscriptSegments` 的 tokenizer 规则只用于 Nemotron，不用于 SenseVoice。
+- 已知局限：VAD 使用 FluidAudio 默认阈值，极轻声或远场语音可能被判为静音（整轨全无语音时才有固定窗口兜底）；每块整段读入内存（10 分钟约 38 MB Float）。首字识别对窗口边界敏感：保留样本在 0.0/0.2/0.5 s 补边时首字“这是”会错成“这试/测试”，0.3/0.4/0.6/0.8 s 正确，全文件直接识别也正确；0.4 s 只在这一段 16 秒样本上验证过，不代表最优值，真实会议 A/B 前不改默认引擎。
+
+## 转写语言与中外对照逐字稿（2026-10-08）
+
+最终稿落盘后（停止录音定稿、恢复录音、修复转写三条路径，以及手动重新生成摘要时补做），`AppModel` 另起后台任务：
+
+1. **语言判定**（全部引擎，本地）：`TranscriptLanguageDetector` 按字符类别计数——假名占中日文字符 ≥15% 判日文，谚文占多判韩文，其余中日文字符判中文，拉丁等字母文本交给 `NLLanguageRecognizer` 在纪要语言列表内识别。结果是 ISO 639-1 代码，写入 `meeting.json` 的 `transcriptLanguage`。FluidAudio 的 `SenseVoiceManager` 在私有 decode 里剥掉语言标签，所以 SenseVoice 也用同一文本判定。只含汉字的日文短句会判成中文（测试固化了这一点）。
+2. **对照翻译**：仅当判定语言与 `meetingNotesLanguage` 不同（`Same as transcript` 视为不翻译）、**Settings → Summaries → Translate foreign-language transcripts**（`transcript.translation.enabled`，默认开）打开、摘要后端不是 Off 时，才把逐字稿经摘要后端发出。分派与 `OpenAIEnricher.requestInsights` 调同样的函数和设置：Codex 走应用内 ChatGPT 登录与摘要模型/推理设置（未登录则不发，记为翻译失败），Custom command 走 `CommandSummaryBackend.generate`；Off 时不发生任何外发。外发范围与摘要相同，不新增目的地。翻译 schema 与提示词独立（`TranscriptTranslator`），提示词沿用“数据而非指令”的围栏。
+3. **对齐**：翻译单位是 `TranscriptFormatter.mergedLines` 的行（与 `transcript.md` 的时间戳行一致）。按 ≤40 行、≤3000 字分块（单行过长自成一块，不拆行），每行带全局编号；返回必须恰好覆盖本块全部编号、无重复、无空译文，否则该块重试（共 3 次）。仍不符的块标为未翻译（文件中显示 “_(Translation failed for this line.)_”，frontmatter `complete: false`），其它块照常保存；后端本身连续 3 次报错则整次翻译放弃；所有块都对不齐也放弃。手动重新生成摘要会对缺失或不完整的翻译重试。
+4. **产物**：`meeting.json` 的 `transcriptTranslation` 保存原文行、译文、源/目标语言、`transcriptionVersion`、生成方；`MeetingStore.persist`/`persistTranscriptArtifact` 据此渲染 `transcript.<目标语言代码>.md`（例如简体中文为 `transcript.zh.md`，代码取 `MeetingNotesLanguage.languageCode`），每行“时间戳＋原文”后接引用块译文。翻译失败、未触发或被关闭都不影响 `transcript.md` / `meeting.md` 定稿；`meeting.md` 继续按 `meetingNotesLanguage` 生成（简体中文指令为 “Write every generated text field in Chinese (Simplified), regardless of the transcript language.”，已有测试确认它进入实际摘要提示词）。
+
+各路径行为：
+
+| 路径 | 对照文件 |
+| --- | --- |
+| 本地归档镜像 / 远端 rsync（`--delete-excluded`） | 普通 `.md`，不在排除列表，随会议同步；源目录删除后镜像也删除 |
+| 重命名 | 随目录移动，按新标题重新渲染 |
+| 重新生成摘要、补摘要、设置 Codex 线程等 `persist` | 保留并重新渲染 |
+| 重新转写（`replaceCompletedTranscript`） | 版本号变化，清空语言与翻译并删除文件，之后重新判定/翻译 |
+| 「自动删除详细记录」（`purgeExpiredTranscripts`） | 与 `transcript.md`、音频一起删除，`transcriptTranslation` 清空；已删除逐字稿的会议不会再写入翻译 |
+| 删除会议 | 先取消该会议进行中的翻译任务，再随整个目录删除 |
+
+翻译保存时按会议 ID 重新读取，并核对 `transcriptionVersion` 未变、逐字稿未删除，否则丢弃结果。每次保存走既有 `persist`，会像摘要更新一样再次触发同步与会后 hook；hook 可能先于对照文件到达。`meeting.json` 体积随译文增加，它不同步到远端。
+
 ## 改动过的上游文件
 
 - `Sources/MeetingNotes/OpenAIEnricher.swift`：入口按后端检查、请求分派、样例测试入口、后端来源标记；沿用上游提示词、schema、分块和解码结构。
-- `Sources/MeetingNotes/SettingsView.swift`：Summaries 面板插入一个 `SummaryBackendSettingsView()` 引用。
-- `Sources/MeetingNotes/AppModel.swift`：补摘要的登录检查仅限 Codex，并在批次中检查关闭状态。
-- `Sources/MeetingNotes/MeetingStore.swift`：关闭时两处补摘要候选查询返回空。
+- `Sources/MeetingNotes/SettingsView.swift`：Summaries 面板插入一个 `SummaryBackendSettingsView()` 引用；Transcriptions 面板拆分最终/实时引擎列表（实时去掉 SenseVoice），SenseVoice 说明文字。
+- `Sources/MeetingNotes/AppModel.swift`：补摘要的登录检查仅限 Codex，并在批次中检查关闭状态；定稿、恢复、修复、重新生成摘要后调度语言判定与翻译任务，删除会议前取消该任务。
+- `Sources/MeetingNotes/MeetingStore.swift`：关闭时两处补摘要候选查询返回空；`persist`/`persistTranscriptArtifact` 渲染或删除对照文件，`setTranscriptLanguage` 保存入口，重新转写清空、留存清理删除。
 - `Resources/Info.plist`：关闭自动更新默认值，换 fork 空源。
-- `Sources/MeetingNotes/TranscriptionEngine.swift`：最终转写入口取得录音目录锁，补充取消检查；实时队列不变。
+- `Sources/MeetingNotes/TranscriptionEngine.swift`：最终转写入口取得录音目录锁，补充取消检查；按设置选择 SenseVoice 并在非取消错误时回退 Nemotron；实时队列不变。
+- `Sources/MeetingNotes/OpenAITranscriber.swift`：`TranscriptionEngineOption.senseVoice`、`supportsLivePreview`，实时设置读写排除 SenseVoice。
+- `Sources/MeetingNotes/Models.swift`：`MeetingDocument` 增加可选的 `transcriptLanguage`、`transcriptTranslation`（旧 `meeting.json` 照常解码，未设置时不写出）。
 
-新增文件：`SummaryBackendSettings.swift`、`CommandSummaryBackend.swift`、`SummaryBackendSettingsView.swift`、`ForkUpdatePolicy.swift`、`TranscriptionLock.swift`、两份 `Tests/MeetingNotesTests/*Tests.swift`、`Tests/test_transcription_lock.py`、`Tests/TranscriptionLockFixtures.swift`、`fork-appcast.xml`、本说明。
+`OpenAIEnricher.swift` 本轮未改：翻译分派在 `TranscriptTranslation.swift` 中调用相同的后端函数，以把本轮触及的上游文件控制在 6 个。
+
+新增文件：`SummaryBackendSettings.swift`、`CommandSummaryBackend.swift`、`SummaryBackendSettingsView.swift`（另含翻译开关）、`ForkUpdatePolicy.swift`、`TranscriptionLock.swift`、`SenseVoiceTranscriber.swift`、`TranscriptLanguage.swift`、`TranscriptTranslation.swift`、`Tests/MeetingNotesTests/*Tests.swift`（含 `SenseVoiceTests`、`SenseVoiceProbeTests`、`TranscriptTranslationTests`）、`Tests/test_transcription_lock.py`、`Tests/TranscriptionLockFixtures.swift`、`fork-appcast.xml`、本说明。
 
 ## 同步上游与验证
 
-同步新正式 tag 时优先检查以上六个接入文件；确认上游没有绕开 `OpenAIEnricher` 的新摘要路径，新的补摘要任务是否也处理 off。检查 `GeneratedInsights` / schema / `generationTimeout` 的变动，确认命令与 Codex 仍共用同一合同。检查 Sparkle 是否仍使用 `UpdateChannelDelegate`、是否新增替代更新入口；保留委托拒绝、空源及稳定版/Beta 的隔离。检查停止录音和恢复路径是否仍共用 `FinalTranscriptionEngine.process`，保留文件锁与取消传播。不得用上游 `Info.plist` 覆盖自建版更新策略。原有分块 checkpoint 未新增后端维度；更换后端后继续旧失败任务可能复用既有部分摘要。
+同步新正式 tag 时优先检查以上六个接入文件；确认上游没有绕开 `OpenAIEnricher` 的新摘要路径，新的补摘要任务是否也处理 off。检查 `GeneratedInsights` / schema / `generationTimeout` 的变动，确认命令与 Codex 仍共用同一合同。检查 Sparkle 是否仍使用 `UpdateChannelDelegate`、是否新增替代更新入口；保留委托拒绝、空源及稳定版/Beta 的隔离。检查停止录音和恢复路径是否仍共用 `FinalTranscriptionEngine.process`，保留文件锁与取消传播；`TranscriptionEngineOption` 若被上游改动，保留 `senseVoice` 只出现在最终引擎列表。上游若改 `requestInsights` 的分派、模型/推理设置或超时，`TranscriptTranslationBackend` 要同步改；上游若新增写 `transcript.md` 或删除逐字稿的路径，要同时处理 `transcript.<code>.md`，若改 rsync 排除规则，确认 `*.md` 仍同步。升级 FluidAudio 时复核 `SenseVoiceManager`、`VadManager.segmentSpeech`、`VadSegmentationConfig`（debug 断言要求 `speechPadding ≤ minSpeechDuration`）和 SenseVoice 窗口上限。不得用上游 `Info.plist` 覆盖自建版更新策略。原有分块 checkpoint 未新增后端维度；更换后端后继续旧失败任务可能复用既有部分摘要。
 
 常规验证入口：`swift build`、`swift test`、`scripts/build-app.sh`。构建脚本只打包与签名，本轮不运行 `scripts/stable-build.sh`，不启动 app、不申请系统权限、不录音。开发调试只测 Swift 逻辑，不把测试通过或代码签名通过当作录音和 UI 验收。
 
@@ -130,5 +167,17 @@ swift test --disable-automatic-resolution --filter transcriptFormatter
 MEETING_NOTES_TEST_COMMAND="claude -p --output-format text --tools '' --no-session-persistence --strict-mcp-config --restricted" \
   swift test --filter liveSummaryCommandProbe
 ```
+
+SenseVoice 与翻译的显式探针（不设变量即直接返回）：
+
+```sh
+MEETING_NOTES_SENSEVOICE_WAVS=/abs/a.wav:/abs/b.wav MEETING_NOTES_SENSEVOICE_OUT=/abs/report.json \
+  swift test --disable-automatic-resolution --filter localSenseVoiceFinalProbe
+MEETING_NOTES_TEST_COMMAND="<摘要命令>" MEETING_NOTES_TRANSLATION_INPUT=/abs/report.json \
+  MEETING_NOTES_TRANSLATION_OUT=/abs/out-dir \
+  swift test --disable-automatic-resolution --filter liveTranscriptTranslationProbe
+```
+
+第一个走生产 `SenseVoiceTranscriber`（缓存缺失时会像应用一样首次下载模型），输出各 turn 与段时间；第二个把报告里的逐字稿文本经真实命令后端翻译并写出 `transcript.zh.md`，只应喂合成或已授权文本。2026-10-08 结果见总仓 `.local/tmp/meeting-notes-sensevoice/RECORD.md`。
 
 普通 `swift test` 跳过真实 CLI 样例，覆盖 JSON 提取、设置默认值与读写、stdin 大输入、非零退出、超时、取消、生产解码及更新门禁。真实调用日志和执行结论在总仓 `.local/tmp/meeting-notes/RECORD.md`；长期维护合同以本文件为准。
