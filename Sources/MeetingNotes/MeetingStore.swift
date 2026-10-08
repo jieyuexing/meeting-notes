@@ -583,6 +583,8 @@ actor MeetingStore {
     current.transcript = turns
     current.transcriptDeletedAt = nil
     current.transcriptionVersion += 1
+    current.transcriptLanguage = nil
+    current.transcriptTranslation = nil
     meeting = current
     try persist()
     await sync.enqueue(folder: folder, runHookAfterSync: true)
@@ -646,6 +648,31 @@ actor MeetingStore {
       meeting = document
       folder = targetFolder
     }
+  }
+
+  /// Fork: records the post-finalization language and translation of one
+  /// transcript version. Returns `false` when nothing changed or the meeting
+  /// was re-transcribed, purged or deleted meanwhile.
+  @discardableResult
+  func setTranscriptLanguage(
+    _ language: String?, translation: TranscriptTranslation?, meetingID: UUID,
+    transcriptionVersion: Int
+  ) throws -> Bool {
+    guard let (stored, targetFolder) = try? completedMeeting(id: meetingID),
+      stored.transcriptionVersion == transcriptionVersion, stored.transcriptDeletedAt == nil
+    else { return false }
+    var document = stored
+    document.transcriptLanguage = language
+    if let translation { document.transcriptTranslation = translation }
+    guard document.transcriptLanguage != stored.transcriptLanguage
+      || document.transcriptTranslation != stored.transcriptTranslation
+    else { return false }
+    try persist(document, in: targetFolder)
+    if meeting?.id == document.id {
+      meeting = document
+      folder = targetFolder
+    }
+    return true
   }
 
   func setCodexThreadID(_ threadID: String, for meetingID: UUID) async throws {
@@ -1086,8 +1113,10 @@ actor MeetingStore {
     for (targetFolder, original) in targets {
       let transcriptURL = targetFolder.appending(path: "transcript.md")
       let audioURLs = ["microphone.wav", "system.wav"].map { targetFolder.appending(path: $0) }
+      let translationURLs = TranscriptTranslation.allFileNames.map { targetFolder.appending(path: $0) }
       let hasDetailedData = !original.transcript.isEmpty
         || manager.fileExists(atPath: transcriptURL.path)
+        || translationURLs.contains { manager.fileExists(atPath: $0.path) }
         || audioURLs.contains { manager.fileExists(atPath: $0.path) }
         || original.transcriptDeletedAt == nil
       guard hasDetailedData else { continue }
@@ -1095,12 +1124,14 @@ actor MeetingStore {
       var document = original
       document.transcript = []
       document.transcriptDeletedAt = document.transcriptDeletedAt ?? now
+      document.transcriptTranslation = nil
       try atomicWrite(
         encoder.encode(document), to: stateURL(in: targetFolder))
       try atomicWrite(
         Data(MarkdownRenderer.renderMeeting(document).utf8),
         to: targetFolder.appending(path: "meeting.md"))
-      for url in [transcriptURL] + audioURLs where manager.fileExists(atPath: url.path) {
+      for url in [transcriptURL] + translationURLs + audioURLs
+      where manager.fileExists(atPath: url.path) {
         try manager.removeItem(at: url)
       }
       try Data(UUID().uuidString.utf8).write(
@@ -1291,6 +1322,7 @@ actor MeetingStore {
       } else if FileManager.default.fileExists(atPath: transcriptURL.path) {
         try FileManager.default.removeItem(at: transcriptURL)
       }
+      try TranscriptTranslationArtifact.persist(for: meeting, in: folder, write: atomicWrite)
       try atomicWrite(Data(MarkdownRenderer.renderMeeting(meeting).utf8), to: meetingURL)
       if FileManager.default.fileExists(atPath: liveURL.path) {
         try FileManager.default.removeItem(at: liveURL)
@@ -1349,6 +1381,7 @@ actor MeetingStore {
     } else if FileManager.default.fileExists(atPath: transcriptURL.path) {
       try FileManager.default.removeItem(at: transcriptURL)
     }
+    try TranscriptTranslationArtifact.persist(for: meeting, in: folder, write: atomicWrite)
   }
 }
 

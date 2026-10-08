@@ -5,6 +5,7 @@ struct SummaryBackendSettingsView: View {
   @State private var testing = false
   @State private var result = ""
   @State private var failed = false
+  @State private var translateTranscripts = TranscriptTranslationSettingsStore.load()
 
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
@@ -55,11 +56,20 @@ struct SummaryBackendSettingsView: View {
           .foregroundStyle(failed ? Color.red : Color.secondary)
           .textSelection(.enabled)
       }
+      Toggle("Translate foreign-language transcripts", isOn: $translateTranscripts)
+        .disabled(settings.backend == .off)
+      Text("When the detected transcript language differs from the meeting notes language, the finished transcript is sent to the summary backend above and a timestamped original-plus-translation copy is saved as transcript.<language>.md. Nothing is sent while the backend is Off.")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
     }
     .disabled(testing)
     .onChange(of: settings) {
       SummaryBackendSettingsStore.save(settings)
       result = ""
+    }
+    .onChange(of: translateTranscripts) {
+      TranscriptTranslationSettingsStore.save(translateTranscripts)
     }
   }
 }

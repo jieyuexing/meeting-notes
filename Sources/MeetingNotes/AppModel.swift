@@ -167,6 +167,7 @@ final class AppModel {
   private var latestDetectedMeetingApp: String?
   private var recordingMeetingApp: String?
   private var stoppedMeetingFinalizationTasks: [UUID: Task<Void, Never>] = [:]
+  private var transcriptTranslationTasks: [UUID: (token: UUID, task: Task<Void, Never>)] = [:]
   private var stoppedMeetingGracePeriods: Set<UUID> = []
   private var pendingMeetingSummaries: [UUID: TodayMeetingSummary] = [:]
   private var activeRecordingMeetingID: UUID?
@@ -584,6 +585,7 @@ final class AppModel {
       try WavFile.repairHeader(at: url)
     }
     let turns = try await final.process(microphone: microphoneURL, system: systemURL)
+    defer { scheduleTranscriptTranslation(meetingID: document.id) }
     if document.status == .complete {
       try await store.replaceCompletedTranscript(turns)
     } else {
@@ -1662,6 +1664,10 @@ final class AppModel {
       await finalization.value
       pendingMeetingSummaries[meeting.id] = nil
     }
+    if let translation = transcriptTranslationTasks.removeValue(forKey: meeting.id) {
+      translation.task.cancel()
+      await translation.task.value
+    }
     do {
       try await store.deleteMeeting(id: meeting.id)
       await refreshMeetingDay()
@@ -1767,6 +1773,7 @@ final class AppModel {
         document, checkpointURL: folder.appending(path: "enrichment-checkpoint.json"))
       try await store.setCompletedMeetingInsights(
         insights, meetingID: document.id, in: folder)
+      scheduleTranscriptTranslation(meetingID: document.id)
       await remoteSync.flush()
       await notifyCodexSummaryReady(meetingID: document.id)
       await refreshMeetingDay()
@@ -2176,6 +2183,7 @@ final class AppModel {
     if insights != nil, !Task.isCancelled {
       await notifyCodexSummaryReady(meetingID: meetingID)
     }
+    if !Task.isCancelled { scheduleTranscriptTranslation(meetingID: meetingID) }
 
     // Once meeting.json and the Markdown artifacts are complete, housekeeping
     // failures must not downgrade the meeting back to failed.
@@ -2203,6 +2211,45 @@ final class AppModel {
       showTransientStatus(remoteSyncEnabled
         ? "Saved locally and synced to \(archiveDisplayName)"
         : "Saved to the local archive")
+    }
+  }
+
+  /// Fork: language detection and the optional bilingual transcript run after
+  /// the meeting is already final, so a slow or failed translation never
+  /// delays or changes `transcript.md` / `meeting.md`.
+  private func scheduleTranscriptTranslation(meetingID: UUID) {
+    guard !isUITest else { return }
+    transcriptTranslationTasks[meetingID]?.task.cancel()
+    let token = UUID()
+    let task = Task { [weak self] in
+      await self?.translateTranscript(meetingID: meetingID)
+      if self?.transcriptTranslationTasks[meetingID]?.token == token {
+        self?.transcriptTranslationTasks[meetingID] = nil
+      }
+    }
+    transcriptTranslationTasks[meetingID] = (token, task)
+  }
+
+  private func translateTranscript(meetingID: UUID) async {
+    guard let document = try? await store.completedMeeting(id: meetingID).document,
+      let outcome = try? await TranscriptTranslationPass.run(document),
+      !Task.isCancelled
+    else { return }
+    do {
+      if try await store.setTranscriptLanguage(
+        outcome.language, translation: outcome.translation, meetingID: meetingID,
+        transcriptionVersion: document.transcriptionVersion)
+      {
+        await remoteSync.flush()
+      }
+    } catch {
+      reportWarning("Transcript translation could not be saved: \(error.localizedDescription)")
+      return
+    }
+    if let error = outcome.error, state == .idle {
+      reportWarning("Transcript saved; translation failed: \(error.localizedDescription)")
+    } else if outcome.translation?.isComplete == false, state == .idle {
+      reportWarning("Transcript translation saved with untranslated lines")
     }
   }
 
@@ -2266,6 +2313,7 @@ final class AppModel {
       }
       try await store.finalize(insights: insights)
       finalized = true
+      scheduleTranscriptTranslation(meetingID: recoveredDocument.id)
       if insights != nil { await notifyCodexSummaryReady(meetingID: recoveredDocument.id) }
       var cleanupWarning: String?
       if !keepAudioAfterProcessing {

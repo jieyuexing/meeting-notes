@@ -98,6 +98,10 @@ struct MeetingDocument: Codable, Sendable {
   var transcriptionVersion: Int
   var transcriptDeletedAt: Date?
   var codexThreadID: String?
+  /// Fork: ISO 639-1 code of the predominant final-transcript language.
+  var transcriptLanguage: String?
+  /// Fork: rendered as `transcript.<code>.md`; see `TranscriptTranslation`.
+  var transcriptTranslation: TranscriptTranslation?
 
   enum Status: String, Codable, Sendable { case recording, processing, complete, failed }
 
@@ -112,7 +116,9 @@ struct MeetingDocument: Codable, Sendable {
     insights: MeetingInsights? = nil,
     transcriptionVersion: Int = 1,
     transcriptDeletedAt: Date? = nil,
-    codexThreadID: String? = nil
+    codexThreadID: String? = nil,
+    transcriptLanguage: String? = nil,
+    transcriptTranslation: TranscriptTranslation? = nil
   ) {
     self.id = id
     self.title = title
@@ -125,6 +131,8 @@ struct MeetingDocument: Codable, Sendable {
     self.transcriptionVersion = transcriptionVersion
     self.transcriptDeletedAt = transcriptDeletedAt
     self.codexThreadID = codexThreadID
+    self.transcriptLanguage = transcriptLanguage
+    self.transcriptTranslation = transcriptTranslation
   }
 
   var calendarEventIdentifier: String? { calendar?.eventIdentifier }
