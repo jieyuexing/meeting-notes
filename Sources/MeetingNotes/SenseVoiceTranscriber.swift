@@ -195,17 +195,22 @@ enum SenseVoiceSegmentation {
   }
 
   /// `speech` holds VAD ranges relative to the block. A final segment that
-  /// reaches the block end is deferred so the next block starts at its
-  /// beginning, unless it already began at the block start (or this is the
-  /// last block); this keeps speech crossing a block edge in one piece and
-  /// always advances.
+  /// reaches the block end and began in the block's second half is deferred
+  /// so the next block starts just before it; this keeps speech crossing a
+  /// block edge in one piece. In the re-read block that segment starts near
+  /// the beginning, so it is deferred at most once and the loop always
+  /// advances by at least half a block. The last block emits everything.
   static func step(speech: [Range<Int>], blockStart: Int, blockCount: Int, isLast: Bool) -> Step {
     let blockEnd = blockStart + blockCount
     let absolute = speech.map { (blockStart + $0.lowerBound)..<(blockStart + $0.upperBound) }
     guard !isLast, let last = absolute.last, last.upperBound >= blockEnd - blockEdgeTolerance,
-      last.lowerBound > blockStart
+      last.lowerBound >= blockStart + blockCount / 2
     else { return Step(segments: absolute, nextStart: blockEnd) }
-    return Step(segments: Array(absolute.dropLast()), nextStart: last.lowerBound)
+    let emitted = Array(absolute.dropLast())
+    // Restart a little early so the deferred segment keeps its leading
+    // context, but never inside the previous emitted segment.
+    let earliest = max(blockStart + 1, emitted.last?.upperBound ?? 0)
+    return Step(segments: emitted, nextStart: max(earliest, last.lowerBound - contextSamples))
   }
 
   /// Recognition windows for consecutive, non-overlapping `segments`.

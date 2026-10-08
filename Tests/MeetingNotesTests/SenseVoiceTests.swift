@@ -45,17 +45,33 @@ import Testing
   let deferred = SenseVoiceSegmentation.step(
     speech: [rate..<(3 * rate), (8 * rate)..<(10 * rate)], blockStart: 100 * rate,
     blockCount: 10 * rate, isLast: false)
+  let context = SenseVoiceSegmentation.contextSamples
   #expect(deferred.segments == [(101 * rate)..<(103 * rate)])
-  #expect(deferred.nextStart == 108 * rate)
+  #expect(deferred.nextStart == 108 * rate - context)
+
+  // The early restart never reaches back into the previous emitted segment.
+  let close = SenseVoiceSegmentation.step(
+    speech: [rate..<(7 * rate + rate / 2 + rate / 4), (8 * rate)..<(10 * rate)], blockStart: 0,
+    blockCount: 10 * rate, isLast: false)
+  #expect(close.segments == [rate..<(7 * rate + rate / 2 + rate / 4)])
+  #expect(close.nextStart == 7 * rate + rate / 2 + rate / 4)
 
   // Within the one-second tolerance still counts as touching the edge.
   let nearEdge = SenseVoiceSegmentation.step(
-    speech: [(2 * rate)..<(9 * rate + rate / 2)], blockStart: 0, blockCount: 10 * rate,
+    speech: [(6 * rate)..<(9 * rate + rate / 2)], blockStart: 0, blockCount: 10 * rate,
     isLast: false)
   #expect(nearEdge.segments.isEmpty)
-  #expect(nearEdge.nextStart == 2 * rate)
+  #expect(nearEdge.nextStart == 6 * rate - context)
 
-  // Speech that began at the block start is emitted so the loop advances.
+  // Re-reading from there, the same speech starts near the block start and
+  // is emitted even though it still reaches the edge: deferred at most once.
+  let reread = SenseVoiceSegmentation.step(
+    speech: [(context + rate / 4)..<(10 * rate)], blockStart: 6 * rate - context,
+    blockCount: 10 * rate, isLast: false)
+  #expect(reread.segments == [(6 * rate + rate / 4)..<(16 * rate - context)])
+  #expect(reread.nextStart == 16 * rate - context)
+
+  // Speech that began in the first half is emitted so the loop advances.
   let continuous = SenseVoiceSegmentation.step(
     speech: [0..<(10 * rate)], blockStart: 50 * rate, blockCount: 10 * rate, isLast: false)
   #expect(continuous.segments == [(50 * rate)..<(60 * rate)])
