@@ -585,16 +585,19 @@ actor LiveTranscriptionEngine {
 
 actor FinalTranscriptionEngine {
   private let transcriber: NemotronTranscriber
+  private let senseVoice: SenseVoiceTranscriber
 
-  init(transcriber: NemotronTranscriber) {
+  init(transcriber: NemotronTranscriber, senseVoice: SenseVoiceTranscriber = SenseVoiceTranscriber()) {
     self.transcriber = transcriber
+    self.senseVoice = senseVoice
   }
 
   func process(microphone: URL, system: URL) async throws -> [TranscriptTurn] {
     let leases = try await TranscriptionLock.acquire(audioURLs: [microphone, system])
     defer { withExtendedLifetime(leases) {} }
     try Task.checkCancellation()
-    if TranscriptionEngineSettingsStore.load() == .openAI,
+    let engine = TranscriptionEngineSettingsStore.load()
+    if engine == .openAI,
       let apiKey = OpenAITranscribeKeychainStore.load(), !apiKey.isEmpty {
       do {
         let turns = try await processWithOpenAI(microphone: microphone, system: system, apiKey: apiKey)
@@ -608,8 +611,27 @@ actor FinalTranscriptionEngine {
         // Fall back to on-device transcription.
       }
     }
-    let mic = try await transcribeIfUsable(microphone)
-    let remote = try await transcribeIfUsable(system)
+    if engine == .senseVoice {
+      do {
+        let turns = try await processOnDevice(microphone: microphone, system: system, senseVoice: true)
+        try Task.checkCancellation()
+        return turns
+      } catch is CancellationError {
+        throw CancellationError()
+      } catch {
+        try Task.checkCancellation()
+        // Fork: the WAVs stay on disk; a SenseVoice failure (for example a
+        // first-use download without network) falls back to Nemotron.
+      }
+    }
+    return try await processOnDevice(microphone: microphone, system: system, senseVoice: false)
+  }
+
+  private func processOnDevice(
+    microphone: URL, system: URL, senseVoice useSenseVoice: Bool
+  ) async throws -> [TranscriptTurn] {
+    let mic = try await transcribeIfUsable(microphone, senseVoice: useSenseVoice)
+    let remote = try await transcribeIfUsable(system, senseVoice: useSenseVoice)
     try Task.checkCancellation()
 
     guard mic != nil || remote != nil else { throw CocoaError(.fileReadCorruptFile) }
@@ -643,10 +665,13 @@ actor FinalTranscriptionEngine {
       : mergedTurns
   }
 
-  private func transcribeIfUsable(_ url: URL) async throws -> NemotronTranscriber.Result? {
+  private func transcribeIfUsable(
+    _ url: URL, senseVoice useSenseVoice: Bool
+  ) async throws -> NemotronTranscriber.Result? {
     try Task.checkCancellation()
     guard Self.hasUsableAudio(url) else { return nil }
-    return try await transcriber.transcribe(url)
+    return useSenseVoice
+      ? try await senseVoice.transcribe(url) : try await transcriber.transcribe(url)
   }
 
   nonisolated static func hasUsableAudio(_ url: URL) -> Bool {

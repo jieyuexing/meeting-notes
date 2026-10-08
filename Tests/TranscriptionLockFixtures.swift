@@ -37,10 +37,23 @@ actor NemotronTranscriber {
   func transcribe(_ url: URL) async throws -> Result { try await Fixture.transcribe(url) }
 }
 
+actor SenseVoiceTranscriber {
+  func transcribe(_ url: URL) async throws -> NemotronTranscriber.Result {
+    if ProcessInfo.processInfo.environment["FIXTURE_SENSEVOICE_FAIL"] == "1" {
+      Fixture.emit("sensevoice-failed")
+      throw CocoaError(.fileReadCorruptFile)
+    }
+    Fixture.emit("sensevoice")
+    return try await Fixture.transcribe(url)
+  }
+}
+
 enum TranscriptionEngineSettingsStore {
-  enum Engine { case onDevice, openAI }
+  enum Engine { case onDevice, senseVoice, openAI }
   static func load() -> Engine {
-    ProcessInfo.processInfo.environment["FIXTURE_OPENAI"] == "1" ? .openAI : .onDevice
+    let environment = ProcessInfo.processInfo.environment
+    if environment["FIXTURE_SENSEVOICE"] == "1" { return .senseVoice }
+    return environment["FIXTURE_OPENAI"] == "1" ? .openAI : .onDevice
   }
 }
 enum OpenAITranscribeKeychainStore { static func load() -> String? { "fixture-key" } }

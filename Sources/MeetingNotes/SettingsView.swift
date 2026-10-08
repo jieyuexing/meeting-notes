@@ -1015,8 +1015,13 @@ private struct TranscriptionsSettingsPane: View {
 
   /// The OpenAI engine is only offered once a key exists in the OpenAI pane.
   private var engineOptions: [TranscriptionEngineOption] {
-    model.openAITranscribeKeyDraft.trimmingCharacters(in: .whitespaces).isEmpty
-      ? [.onDevice] : TranscriptionEngineOption.allCases
+    TranscriptionEngineOption.allCases.filter {
+      $0 != .openAI || !model.openAITranscribeKeyDraft.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+  }
+
+  private var liveEngineOptions: [TranscriptionEngineOption] {
+    engineOptions.filter(\.supportsLivePreview)
   }
 
   var body: some View {
@@ -1036,10 +1041,13 @@ private struct TranscriptionsSettingsPane: View {
             Text(
               model.transcriptionEngine == .openAI
                 ? "Audio is sent to OpenAI for transcription."
-                : "Audio never leaves this Mac."
+                : model.transcriptionEngine == .senseVoice
+                  ? "Audio never leaves this Mac. SenseVoice writes the final transcript with segment-level timestamps; first use downloads about 450 MB and compiles for 1–3 minutes."
+                  : "Audio never leaves this Mac."
             )
             .font(.caption)
             .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
           }
           Spacer()
           Picker("Transcription engine", selection: Binding(
@@ -1072,7 +1080,7 @@ private struct TranscriptionsSettingsPane: View {
             get: { model.liveTranscriptionEngine },
             set: { model.setLiveTranscriptionEngine($0) }
           )) {
-            ForEach(engineOptions, id: \.self) { option in
+            ForEach(liveEngineOptions, id: \.self) { option in
               Text(option.label).tag(option)
             }
           }

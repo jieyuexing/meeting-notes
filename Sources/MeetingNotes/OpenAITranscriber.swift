@@ -2,14 +2,19 @@ import Foundation
 
 enum TranscriptionEngineOption: String, CaseIterable, Sendable {
   case onDevice
+  /// Fork: final transcription only; SenseVoice has no streaming mode.
+  case senseVoice
   case openAI
 
   var label: String {
     switch self {
     case .onDevice: "On-device"
+    case .senseVoice: "SenseVoice (on-device)"
     case .openAI: "OpenAI API"
     }
   }
+
+  var supportsLivePreview: Bool { self != .senseVoice }
 }
 
 enum OpenAIKeyTestState: Equatable, Sendable {
@@ -33,12 +38,14 @@ enum TranscriptionEngineSettingsStore {
   }
 
   static func loadLive(from defaults: UserDefaults = .standard) -> TranscriptionEngineOption {
-    guard let rawValue = defaults.string(forKey: liveKey) else { return .onDevice }
-    return TranscriptionEngineOption(rawValue: rawValue) ?? .onDevice
+    guard let rawValue = defaults.string(forKey: liveKey),
+      let option = TranscriptionEngineOption(rawValue: rawValue), option.supportsLivePreview
+    else { return .onDevice }
+    return option
   }
 
   static func saveLive(_ option: TranscriptionEngineOption, to defaults: UserDefaults = .standard) {
-    defaults.set(option.rawValue, forKey: liveKey)
+    defaults.set((option.supportsLivePreview ? option : .onDevice).rawValue, forKey: liveKey)
   }
 }
 

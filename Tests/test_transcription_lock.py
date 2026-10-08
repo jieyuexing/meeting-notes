@@ -124,6 +124,31 @@ class TranscriptionLockTests(unittest.TestCase):
                 with (self.root / '.transcription.lock').open('r') as lock:
                     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
+    def test_sensevoice_runs_under_the_same_lock(self):
+        first = self.child(FIXTURE_SENSEVOICE='1')
+        self.assertEqual(self.line(first), 'sensevoice')
+        self.assertEqual(self.line(first), 'entered')
+        second = self.child(FIXTURE_SENSEVOICE='1')
+        self.assertEqual(self.line(first), 'done:1')
+        self.assertEqual(self.line(second), 'sensevoice')
+        self.assertEqual(self.line(second), 'entered')
+        self.assertEqual(self.line(second), 'done:1')
+
+    def test_sensevoice_error_falls_back_to_nemotron(self):
+        child = self.child(FIXTURE_SENSEVOICE='1', FIXTURE_SENSEVOICE_FAIL='1')
+        self.assertEqual(self.line(child), 'sensevoice-failed')
+        self.assertEqual(self.line(child), 'entered')
+        self.assertEqual(self.line(child), 'done:1')
+
+    def test_sensevoice_cancellation_does_not_fall_back(self):
+        child = self.child(FIXTURE_SENSEVOICE='1', FIXTURE_CANCEL='1')
+        self.assertEqual(self.line(child), 'sensevoice')
+        self.assertEqual(self.line(child), 'entered')
+        self.assertEqual(self.line(child), 'cancelled')
+        self.assertEqual(child.wait(timeout=5), 0)
+        with (self.root / '.transcription.lock').open('r') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
     def test_cloud_error_still_falls_back_to_local(self):
         child = self.child(FIXTURE_OPENAI='1', FIXTURE_OPENAI_FAIL='1')
         self.assertEqual(self.line(child), 'cloud-failed')
