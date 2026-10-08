@@ -22,7 +22,7 @@ final class LifelogController {
     case recording
     case yieldingToMeeting
     case sleeping
-    /// Capture could not start (for example the USB microphone is unplugged).
+    /// Capture could not start or its file writer failed.
     case retrying(String)
     /// A setting prevents recording until the user changes it.
     case blocked(String)
@@ -105,6 +105,9 @@ final class LifelogController {
     settings = LifelogSettingsStore.load(from: defaults)
     let activity = activity
     capture.onSamples = { samples in activity.observe(samples, at: now()) }
+    capture.onWriteFailure = { [weak self] url, error in
+      Task { @MainActor in self?.handleWriteFailure(at: url, error: error) }
+    }
     capture.onInterruption = { [weak self] in
       Task { @MainActor in self?.handleInterruption() }
     }
@@ -118,7 +121,7 @@ final class LifelogController {
     case .recording: "Recording · Mac stays awake"
     case .yieldingToMeeting: "Paused while a meeting is recorded"
     case .sleeping: "Paused while the Mac sleeps"
-    case .retrying(let reason): "Waiting for the microphone: \(reason)"
+    case .retrying(let reason): "Waiting to retry capture: \(reason)"
     case .blocked(let reason): reason
     }
   }
@@ -167,11 +170,25 @@ final class LifelogController {
       return
     }
     let previous = settings
-    // Close into the old root before adopting the new root, including silence counters.
-    if previous.rootURL != updated.rootURL { endSegment(reason: .stopped, restart: false) }
+    let changingRoot = previous.rootURL.resolvingSymlinksInPath().standardizedFileURL.path
+      != updated.rootURL.resolvingSymlinksInPath().standardizedFileURL.path
+    if changingRoot {
+      do {
+        // Include current/start and the in-flight queue task, not just the queued URLs.
+        guard current == nil, startTask == nil, queueTask == nil, queue.isEmpty,
+          try !store.hasUnfinishedSegments() else {
+          lastError = "Stop recording and drain pending/failed segments before changing the archive root."
+          return
+        }
+      } catch {
+        lastError = "Cannot verify the old archive; drain it before changing roots: \(error.localizedDescription)"
+        return
+      }
+    }
+    if changingRoot { lastError = nil }
     settings = updated
     LifelogSettingsStore.save(updated, to: defaults)
-    if previous.rootURL != updated.rootURL {
+    if changingRoot {
       for folder in store.pendingFolders() where !queue.contains(folder) { enqueue(folder) }
     }
     await setEnabled(updated.enabled)
@@ -414,9 +431,9 @@ final class LifelogController {
     guard let closing = current else { return }
     let store = LifelogStore(root: closing.folder.deletingLastPathComponent().deletingLastPathComponent(), calendar: calendar)
     let ended = now()
-    let hadSound = hadSound(since: closing.segment.startedAt, at: ended)
     var next: (segment: LifelogSegment, folder: URL)?
     var result: LifelogCaptureResult?
+    var captureFailure: String?
     do {
       if restart {
         let created = try store.createSegment(id: UUID(), startedAt: ended)
@@ -429,6 +446,7 @@ final class LifelogController {
         result = try capture.stop()
       }
     } catch {
+      captureFailure = error.localizedDescription
       result = try? capture.stop()
       phase = .retrying(error.localizedDescription)
       nextRetryAt = ended + Self.retryInterval
@@ -436,18 +454,19 @@ final class LifelogController {
     current = next
     segmentStartedAt = next?.segment.startedAt
     if next == nil { wakeLock.release() }
-    if let writeError = result?.writeError { lastError = "Audio write failed: \(writeError)" }
+    let failure = result?.writeError ?? captureFailure ?? (result == nil ? "Capture returned no closed audio file." : nil)
+    if let failure { lastError = "Audio write failed: " + failure }
 
     var segment = closing.segment
     segment.endedAt = ended
     segment.closeReason = reason
     segment.audioSeconds = result?.seconds ?? ended.timeIntervalSince(segment.startedAt)
     do {
-      if let error = result?.writeError {
+      if let error = failure {
         segment.status = .failed
         segment.error = "Audio capture/write error: " + error
         try store.save(segment, in: closing.folder)
-      } else if hadSound || WavFile.hasMeaningfulSignal(at: store.audioURL(in: closing.folder)) {
+      } else if try WavFile.checkedMeaningfulSignal(at: store.audioURL(in: closing.folder)) {
         segment.status = .pending
         try store.save(segment, in: closing.folder)
         enqueue(closing.folder)
@@ -456,6 +475,7 @@ final class LifelogController {
       }
     } catch {
       lastError = "Segment could not be saved: \(error.localizedDescription)"
+      try? store.markFailed(segment, in: closing.folder, error: error, startedAt: ended)
     }
     refreshStats()
   }
@@ -464,6 +484,15 @@ final class LifelogController {
   /// for at least d", so ask for a hair more than the elapsed time.
   private func hadSound(since start: Date, at time: Date) -> Bool {
     !activity.isQuiet(for: time.timeIntervalSince(start) + 0.001, at: time)
+  }
+
+  private func handleWriteFailure(at url: URL, error: String) {
+    // A notification queued before rotation/stop must not stop a newer segment.
+    guard let current, store.audioURL(in: current.folder) == url else { return }
+    endSegment(reason: .stopped, restart: false)
+    lastError = "Audio write failed: " + error
+    phase = .retrying("Audio write failed: " + error)
+    nextRetryAt = now() + Self.retryInterval
   }
 
   private func handleInterruption() {
@@ -505,27 +534,27 @@ final class LifelogController {
     guard LifelogSettings.rootError(store.root.path, reserved: reservedRoots()) == nil else { return }
     guard var segment = try? store.load(folder: folder) else { return }
     let audio = store.audioURL(in: folder)
-    guard FileManager.default.fileExists(atPath: audio.path) else { return }
-    if segment.status == .recording {
-      // Left open by an earlier run: the WAV header may be stale.
-      try? WavFile.repairHeader(at: audio)
-      let bytes = (try? FileManager.default.attributesOfItem(atPath: audio.path)[.size] as? NSNumber)?
-        .intValue ?? 44
-      let seconds = Double(max(0, bytes - 44) / MemoryLayout<Int16>.size) / Double(WavFile.sampleRate)
-      segment.status = .pending
-      segment.closeReason = .recovered
-      segment.audioSeconds = seconds
-      segment.endedAt = segment.startedAt + seconds
-    }
     let started = now()
     do {
-      let turns: [TranscriptTurn]
-      do {
-        turns = try await transcribe(audio, store.systemAudioURL(in: folder))
-      } catch let error as CocoaError where error.code == .fileReadCorruptFile {
-        // The shared entry reports "no usable audio" this way.
-        turns = []
+      if segment.status == .recording || (segment.closeReason == .recovered && segment.endedAt == nil) {
+        segment.closeReason = .recovered
+        // Header repair errors are failures; preserve the original audio.
+        try WavFile.repairLifelogHeader(at: audio)
+        let attributes = try FileManager.default.attributesOfItem(atPath: audio.path)
+        guard let bytes = (attributes[.size] as? NSNumber)?.intValue else {
+          throw CocoaError(.fileReadCorruptFile)
+        }
+        let seconds = Double(max(0, bytes - 44) / MemoryLayout<Int16>.size) / Double(WavFile.sampleRate)
+        segment.status = .pending
+        segment.closeReason = .recovered
+        segment.audioSeconds = seconds
+        segment.endedAt = segment.startedAt + seconds
       }
+      // Only a successful validated read can establish silence. The shared final
+      // engine uses the throwing check again under its lock; EVERY error from
+      // it propagates, so a later read failure can never become empty.
+      let turns = try WavFile.checkedMeaningfulSignal(at: audio)
+        ? try await transcribe(audio, store.systemAudioURL(in: folder)) : []
       try store.complete(
         segment, in: folder, turns: turns, transcriptionStartedAt: started, transcribedAt: now(),
         deleteAudio: !AudioRetentionSettingsStore.load(from: defaults))

@@ -154,8 +154,22 @@ struct LifelogStore: Sendable {
     try save(updated, in: folder)
   }
 
-  /// Segments whose audio still waits for transcription: closed ones, and
-  /// ones a previous run left in `recording` (crash or forced quit).
+  /// Conservative root-change gate: unreadable metadata cannot prove drainage.
+  func hasUnfinishedSegments() throws -> Bool {
+    let names: [String]
+    do { names = try FileManager.default.contentsOfDirectory(atPath: root.path) }
+    catch let error as CocoaError where error.code == .fileReadNoSuchFile { return false }
+    for day in names where day.wholeMatch(of: /\d{4}-\d{2}-\d{2}/) != nil {
+      let directory = root.appending(path: day)
+      for name in try FileManager.default.contentsOfDirectory(atPath: directory.path) where name != "day.json" {
+        let segment = try load(folder: directory.appending(path: name))
+        if [.recording, .pending, .failed].contains(segment.status) { return true }
+      }
+    }
+    return false
+  }
+
+  /// Segments whose audio still waits for transcription, including crash recovery.
   func pendingFolders() -> [URL] {
     days().flatMap { segmentFolders(day: $0) }.filter { folder in
       guard let segment = try? load(folder: folder),

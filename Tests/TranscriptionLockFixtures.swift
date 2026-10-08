@@ -71,6 +71,19 @@ enum VocabularyTextCorrector { static func apply(to text: String) -> String { te
 enum FillerWordSettingsStore { static func load() -> Bool { false } }
 enum FillerWordFilter { static func apply(to turns: [TranscriptTurn]) -> [TranscriptTurn] { turns } }
 enum WavFile {
+  static func checkedMeaningfulSignal(at url: URL) throws -> Bool {
+    if ProcessInfo.processInfo.environment["FIXTURE_STRICT_READ_ONCE"] == "1" {
+      let marker = url.deletingLastPathComponent().appending(path: "read-failed-once")
+      if !FileManager.default.fileExists(atPath: marker.path) {
+        try Data().write(to: marker)
+        throw CocoaError(.fileReadNoPermission)
+      }
+    }
+    if ProcessInfo.processInfo.environment["FIXTURE_STRICT_READ_ERROR"] == "1" {
+      throw CocoaError(.fileReadNoPermission)
+    }
+    return hasMeaningfulSignal(at: url)
+  }
   static func hasMeaningfulSignal(at url: URL) -> Bool {
     FileManager.default.fileExists(atPath: url.path)
   }

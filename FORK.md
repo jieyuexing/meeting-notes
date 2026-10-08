@@ -185,14 +185,14 @@ MEETING_NOTES_TEST_COMMAND="<摘要命令>" MEETING_NOTES_TRANSLATION_INPUT=/abs
 ## MEET-4 常开模式（2026-10-08）
 
 **Settings → Always-on → Record continuously**，默认关闭。麦克风沿用 Microphone 面板的设备 UID/优先级；建议实验固定 USB 输入并确认它仍连接。此模式只采麦克风，不采系统音频，系统应用排除列表仍仅影响正式会议。
-默认根 `~/jieyuexing-universe/.state/opsail/lifelog`，与会议归档、Spool 的相同/父子路径（含可解析符号链接）互斥，文件系统根也拒绝。反向修改会议归档时同样校验。修改常开根先在旧根收好尾段与静音统计；旧根的已排队任务继续在原目录完成，不搬移历史。
+默认根 `~/jieyuexing-universe/.state/opsail/lifelog`，与会议归档、Spool 的相同/父子路径（含可解析符号链接）互斥，文件系统根也拒绝。反向修改会议归档时同样校验。修改常开根前必须先关闭录音并排空：当前段、正在启动、在途转写、内存队列以及磁盘中的 recording/pending/failed 任一存在都拒绝切根并显示提示；旧根元数据读错也拒绝。关闭开关并处理 failed 后才能换根，不搬移或删除历史，不建立历史根注册表。同根设置修改（含可解析符号链接别名）不触发切根或把当前段加入转写队列；拒绝后界面恢复实际根。
 
 - 默认连续静音 180 秒或单段 1800 秒切段，可在该面板调整。分段用新增 `LifelogRecorder` 的 AVAudioEngine 麦克风 tap，在锁内交换 WAV 文件句柄；不改上游 `MicrophoneRecorder`/`SystemAudioRecorder`。正常切段不主动重启引擎，但音频回调、磁盘同步、系统调度/设备驱动可能造成丢帧，**未证明无缝，也没有可保证的间隙上限**。静音判断是既有能量阈值，不是说话人识别；低音量或远场漏检仍须实验核实。高采样率的小缓冲先累积到 100ms 再交能量监测，关闭文件前再检查 WAV 信号，避免回调尾部被当作空段。
-- `LifelogController` 独立拥有录音和串行待转写队列；正式会议开始前收尾并释放麦克风，会议录音停止（含启动失败）后恢复。会议暂停期间仍让出，等待会议结束。交接有启动/授权/调度耗时，无硬上界。睡眠收尾，唤醒另开；录音持有现有 `RecordingWakeLock`。设备变更在 2 秒后重试，启动失败每 30 秒重试；不能保证断开期间有音频，也不补造该时段。
-- 正常退出由 `NSApplication.willTerminateNotification` 同步关闭尾段并落 `pending`，不等 ASR；下次启动恢复。强退/崩溃后 `recording` 段按文件字节修复 WAV header 并重试，未持久化到磁盘的音频无法保证。关闭开关收尾后仍处理已排队段；启用设置保留则应用下次启动自动录音。
-- 最终转写沿用 `FinalTranscriptionEngine.process` 的跨进程目录锁、SenseVoice/Nemotron 与取消处理。常开调用增加 `onDeviceOnly: true`：即使等待锁时引擎切为 OpenAI，也在锁内拒绝上传；音频留待恢复本地引擎。会议调用默认参数不变。常开建议 SenseVoice，但不替用户改设置；缺失模型仍可能按既有逻辑下载模型或回退 Nemotron。
+- `LifelogController` 独立拥有录音和串行待转写队列；正式会议开始前收尾并释放麦克风，会议录音停止（含启动失败）后恢复。会议暂停期间仍让出，等待会议结束。交接有启动/授权/调度耗时，无硬上界。睡眠收尾，唤醒另开；录音持有现有 `RecordingWakeLock`。第一次 WAV 写入/checkpoint 失败在锁外异步通知控制器（携带段 URL），立即收尾保留已写前缀并标 failed，显示写错与重试状态，30 秒后尝试新段；首错只通知一次，过期段通知不停止新段。异步调度没有实时上界，不承诺故障至收尾期间的音频可恢复。设备变更在 2 秒后重试，启动失败每 30 秒重试；不能保证断开期间有音频，也不补造该时段。
+- 正常退出由 `NSApplication.willTerminateNotification` 同步关闭尾段并落 `pending`，不等 ASR；下次启动恢复。强退/崩溃后 `recording` 段先验证本模式固定 PCM WAV 头与偶数字节，再按文件字节修复 header 的长度并重试；坏头、读错、修头失败均保留 WAV 标 failed，修头权限恢复后可手动重试。未持久化到磁盘的音频无法保证。关闭开关收尾后仍处理已排队段；启用设置保留则应用下次启动自动录音。
+- 最终转写沿用 `FinalTranscriptionEngine.process` 的跨进程目录锁、SenseVoice/Nemotron 与取消处理。常开调用增加 `onDeviceOnly: true`：即使等待锁时引擎切为 OpenAI，也在锁内拒绝上传；音频留待恢复本地引擎。常开麦克风在该锁内同样使用 throwing 信号检查，读错不能经旧 Bool 检查变成空识别；常开中的 Cocoa 文件读取/POSIX 错误直接抛出，不用 ASR 回退掩盖一次性读错；其他 SenseVoice 模型故障的回退仍走严格检查，且此模式不读不存在的系统轨。会议调用默认参数及旧 WavFile Bool API 行为不变。常开建议 SenseVoice，但不替用户改设置；缺失模型仍可能按既有逻辑下载模型或回退 Nemotron。
 - **不调用 MeetingStore**，不产生会议标题、实时预览、逐段摘要、对照翻译、Codex 线程、Tana、rsync、HTTP/Shell hook；只做本地语言判定。常开启用期间不弹新的会议检测通知；正式会议自己的检测/自动停止继续工作。每日摘要的 Codex/command 是用户单独配置的外发边界，会议摘要设置不会自动继承到常开。
-- 全静音段删除目录并增加同日 `day.json` 计数；有信号但无转写保留 `empty` 元数据，不写空逐字稿，删除音频。成功转写按既有 Storage 音频留存设置（默认删音频）；捕获写入错误/转写失败保留音频并标 `failed`。Always-on 的 **Retry failed transcripts (all days)** 手动重试。失败不自动无限重试；pending/recording 在下次启动恢复，队列无并行转写/无自动丢弃上限，积压会增加磁盘占用。采样分别记录 pending、recording、failed。
+- 只有成功读取且验证头部/长度、确认无信号的全静音段才删除目录并增加同日 `day.json` 计数；有信号且 ASR 成功返回空转写才保留 `empty` 元数据，不写空逐字稿，删除音频。成功转写按既有 Storage 音频留存设置（默认删音频）；读取/校验/修头、捕获写入/checkpoint/stop 错误及转写失败保留音频并标 `failed`，不会把通用 fileReadCorruptFile 吞为成功空识别。元数据自身不可写时只能显示错误并保留原文件，不能保证 failed 状态成功落盘。Always-on 的 **Retry failed transcripts (all days)** 手动重试。失败不自动无限重试；pending/recording 在下次启动恢复，队列无并行转写/无自动丢弃上限，积压会增加磁盘占用。采样分别记录 pending、recording、failed。
 
 目录合同（ISO8601 时间写在元数据内，日目录用本地日历）：
 
@@ -228,6 +228,8 @@ swift test --disable-automatic-resolution -Xswiftc -warnings-as-errors --filter 
 输出为 `digest/2026-10-08.local.md` 及同名 JSON，不覆盖默认摘要。先停止实验并等队列排空，再让三个后端读取同一天的稳定文字；不要并行重跑相同 label。标签用字母/数字/连字符；总仓包装器验证日期/标签。`Run.inputCharacters` 为所有实际请求提示词字符数（含归并/重试、不含命令包装 schema），不是原文字符数/token；LM Studio 包装器另记含 schema 的字符数及可取得的 token 用量。
 
 本次新增文件：`LifelogSettings.swift`、`LifelogRecorder.swift`、`LifelogStore.swift`、`LifelogController.swift`、`LifelogDigest.swift`、`LifelogSettingsView.swift`、`Tests/MeetingNotesTests/LifelogTests.swift`。
-本次改动的上游文件仅 **3 个**：`AppModel.swift`（初始化、会议交接、归档隔离/检测通知门禁）、`SettingsView.swift`（Always-on 入口）、`TranscriptionEngine.swift`（本地处理约束）；既有转写锁 fixture 增加 local-only 断言。同步上游时重点核对录音 start/stop 的 await 边界、willTerminate 通知、FinalTranscriptionEngine 锁内的引擎分派；不把新摘要/归档/翻译路径接到常开段。MEET-3 语言/翻译与锁保留。
+MEET-4 含 R1–R4 修复累计改动的上游 Swift 文件仅 **4 个**：`AppModel.swift`（初始化、会议交接、归档隔离/检测通知门禁）、`SettingsView.swift`（Always-on 入口）、`TranscriptionEngine.swift`（本地处理约束与严格读取）、`WavFile.swift`（新增常开 throwing 校验/安全修头，旧会议 API 兼容）；既有转写锁 fixture 增加 local-only 与严格读错传播断言。同步上游时重点核对录音 start/stop 的 await 边界、willTerminate 通知、FinalTranscriptionEngine 锁内的引擎分派与 strictMicrophone 路径、WavFile 固定 PCM 头合同及常开首错/根切换门禁；不把新摘要/归档/翻译路径接到常开段。MEET-3 语言/翻译与锁保留。
 
 实验专用脚本和完整操作合同在总仓 `.local/tmp/lifelog-24h/RUNBOOK.md`（临时、可重建；尚未启动 24h 实验）。严格测试、红绿回归、克隆构建与本地合成模型验证记录见同目录 `RECORD.md`。这些证明代码/fixture/构建边界，**不代表 USB 实录、24h 持续运行、零间隙、中文准确率或真实每日汇总质量验收**。
+
+R1–R4 修复回执见总仓 `.local/tmp/lifelog-24h/FIXES.md`；原 `review/` 证据只读保留。脚本无 PID 时应用 CPU/RSS/累计 CPU 留空并记 process_absent；报告也兼容排除旧 CSV 无 PID 的零值，单列有 PID、缺席、探查失败样本及点跨度/采样间隔，磁盘独立统计。上述跨度不是可证明的持续停机或连续运行时长。

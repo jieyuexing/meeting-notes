@@ -34,7 +34,7 @@ struct LifelogSettingsPane: View {
           GridRow {
             Text("Folder")
               .gridColumnAlignment(.trailing)
-            // Commits on Return only: every change of folder restarts capture.
+            // Commits on Return only; changing roots requires stopped, drained capture.
             TextField(LifelogSettings.defaultRootPath, text: $rootDraft)
               .onSubmit { draft.rootPath = rootDraft }
           }
@@ -99,7 +99,14 @@ struct LifelogSettingsPane: View {
       guard loaded else { return }
       var updated = draft
       updated.enabled = lifelog.settings.enabled
-      Task { await lifelog.updateSettings(updated) }
+      Task {
+        await lifelog.updateSettings(updated)
+        // A rejected root must not keep looking like the active archive folder.
+        if draft.rootPath == updated.rootPath, lifelog.settings.rootPath != updated.rootPath {
+          draft.rootPath = lifelog.settings.rootPath
+          rootDraft = lifelog.settings.rootPath
+        }
+      }
     }
   }
 

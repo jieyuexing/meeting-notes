@@ -617,25 +617,35 @@ actor FinalTranscriptionEngine {
     }
     if engine == .senseVoice {
       do {
-        let turns = try await processOnDevice(microphone: microphone, system: system, senseVoice: true)
+        let turns = try await processOnDevice(microphone: microphone, system: system, senseVoice: true, strictMicrophone: onDeviceOnly)
         try Task.checkCancellation()
         return turns
       } catch is CancellationError {
         throw CancellationError()
       } catch {
         try Task.checkCancellation()
-        // Fork: the WAVs stay on disk; a SenseVoice failure (for example a
-        // first-use download without network) falls back to Nemotron.
+        // A transient file read error is still a failed lifelog segment, not
+        // permission to retry into a successful empty result and delete its WAV.
+        let failure = error as NSError
+        let fileReadCodes = CocoaError.Code.fileReadUnknown.rawValue..<CocoaError.Code.fileWriteUnknown.rawValue
+        if onDeviceOnly && (failure.domain == NSPOSIXErrorDomain
+          || (failure.domain == NSCocoaErrorDomain && fileReadCodes.contains(failure.code))) {
+          throw error
+        }
+        // Fork: other SenseVoice failures (for example first-use model loading)
+        // still fall back to Nemotron; meeting fallback behavior is unchanged.
       }
     }
-    return try await processOnDevice(microphone: microphone, system: system, senseVoice: false)
+    return try await processOnDevice(microphone: microphone, system: system, senseVoice: false, strictMicrophone: onDeviceOnly)
   }
 
   private func processOnDevice(
-    microphone: URL, system: URL, senseVoice useSenseVoice: Bool
+    microphone: URL, system: URL, senseVoice useSenseVoice: Bool, strictMicrophone: Bool
   ) async throws -> [TranscriptTurn] {
-    let mic = try await transcribeIfUsable(microphone, senseVoice: useSenseVoice)
-    let remote = try await transcribeIfUsable(system, senseVoice: useSenseVoice)
+    let mic = try await transcribeIfUsable(microphone, senseVoice: useSenseVoice, strict: strictMicrophone)
+    // Always-on owns one microphone WAV, with no system track. Every read in
+    // this path throws on failure; it never reuses the legacy lossy Bool guard.
+    let remote = strictMicrophone ? nil : try await transcribeIfUsable(system, senseVoice: useSenseVoice)
     try Task.checkCancellation()
 
     guard mic != nil || remote != nil else { throw CocoaError(.fileReadCorruptFile) }
@@ -670,10 +680,11 @@ actor FinalTranscriptionEngine {
   }
 
   private func transcribeIfUsable(
-    _ url: URL, senseVoice useSenseVoice: Bool
+    _ url: URL, senseVoice useSenseVoice: Bool, strict: Bool = false
   ) async throws -> NemotronTranscriber.Result? {
     try Task.checkCancellation()
-    guard Self.hasUsableAudio(url) else { return nil }
+    let usable = strict ? try WavFile.checkedMeaningfulSignal(at: url) : Self.hasUsableAudio(url)
+    guard usable else { return nil }
     return useSenseVoice
       ? try await senseVoice.transcribe(url) : try await transcriber.transcribe(url)
   }

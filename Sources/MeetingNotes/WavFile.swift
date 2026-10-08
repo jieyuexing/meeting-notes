@@ -41,6 +41,10 @@ enum WavFile {
     guard let data = try? Data(contentsOf: url, options: .mappedIfSafe), data.count > 44 else {
       return false
     }
+    return meaningfulSignal(in: data)
+  }
+
+  private static func meaningfulSignal(in data: Data) -> Bool {
     return data.withUnsafeBytes { bytes in
       let allSamples = bytes.bindMemory(to: Int16.self)
       guard allSamples.count > 22 else { return false }
@@ -72,6 +76,32 @@ enum WavFile {
       }
       return false
     }
+  }
+
+  /// Strict check for lifelog's own canonical PCM WAVs. Read/format failures
+  /// are errors, never evidence of silence. The legacy meeting API stays unchanged.
+  static func checkedMeaningfulSignal(at url: URL) throws -> Bool {
+    let data = try checkedData(at: url, allowStaleSizes: false)
+    return meaningfulSignal(in: data)
+  }
+
+  /// Recover only size fields of a recognizable lifelog WAV. Never turn an
+  /// arbitrary/corrupt header into a valid silent file by overwriting it.
+  static func repairLifelogHeader(at url: URL) throws {
+    _ = try checkedData(at: url, allowStaleSizes: true)
+    try repairHeader(at: url)
+  }
+
+  private static func checkedData(at url: URL, allowStaleSizes: Bool) throws -> Data {
+    let data = try Data(contentsOf: url)
+    guard data.count >= 44, (data.count - 44).isMultiple(of: 2),
+      data.count - 44 <= Int(UInt32.max) - 36 else { throw CocoaError(.fileReadCorruptFile) }
+    let expected = header(dataSize: UInt32(data.count - 44))
+    for index in 0..<44 {
+      if allowStaleSizes && ((4..<8).contains(index) || (40..<44).contains(index)) { continue }
+      guard data[index] == expected[index] else { throw CocoaError(.fileReadCorruptFile) }
+    }
+    return data
   }
 
   static func writeTemporary(samples: [Int16]) throws -> URL {

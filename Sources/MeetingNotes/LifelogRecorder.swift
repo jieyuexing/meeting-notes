@@ -40,6 +40,7 @@ protocol LifelogCapture: AnyObject {
   var onSamples: (@Sendable ([Int16]) -> Void)? { get set }
   /// The audio engine stopped underneath us (device change or removal).
   var onInterruption: (@Sendable () -> Void)? { get set }
+  var onWriteFailure: (@Sendable (URL, String) -> Void)? { get set }
   var isRunning: Bool { get }
   func start(writingTo url: URL, preferredDeviceUID: String?) throws
   /// Finishes the current file and continues into `url` without an intentional engine restart: the
@@ -60,12 +61,20 @@ final class LifelogRecorder: LifelogCapture, @unchecked Sendable {
     get { lock.withLock { interruptionHandler } }
     set { lock.withLock { interruptionHandler = newValue } }
   }
+  var onWriteFailure: (@Sendable (URL, String) -> Void)? {
+    get { lock.withLock { writeFailureHandler } }
+    set { lock.withLock { writeFailureHandler = newValue } }
+  }
   var isRunning: Bool { lock.withLock { tapping } }
 
   private let engine = AVAudioEngine()
   private let lock = NSLock()
   private var samplesHandler: (@Sendable ([Int16]) -> Void)?
   private var interruptionHandler: (@Sendable () -> Void)?
+  private var writeFailureHandler: (@Sendable (URL, String) -> Void)?
+  private let writeData: @Sendable (FileHandle, Data) throws -> Void
+  private let checkpoint: @Sendable (FileHandle, Int) throws -> Void
+  private let failureQueue = DispatchQueue(label: "LifelogRecorder.write-failure")
   private var handle: FileHandle?
   private var outputURL: URL?
   private var byteCount = 0
@@ -75,7 +84,12 @@ final class LifelogRecorder: LifelogCapture, @unchecked Sendable {
   private var activitySamples: [Int16] = []
   private var configurationObserver: NSObjectProtocol?
 
-  init() {
+  init(
+    writeData: @escaping @Sendable (FileHandle, Data) throws -> Void = { try $0.write(contentsOf: $1) },
+    checkpoint: @escaping @Sendable (FileHandle, Int) throws -> Void = { try WavFile.checkpoint($0, bytes: $1) }
+  ) {
+    self.writeData = writeData
+    self.checkpoint = checkpoint
     configurationObserver = NotificationCenter.default.addObserver(
       forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
     ) { [weak self] _ in
@@ -90,6 +104,19 @@ final class LifelogRecorder: LifelogCapture, @unchecked Sendable {
   }
 
   func start(writingTo url: URL, preferredDeviceUID: String?) throws {
+    try startFile(at: url)
+    do { try startEngine(preferredDeviceUID: preferredDeviceUID) } catch {
+      lock.withLock {
+        try? handle?.close()
+        handle = nil
+        outputURL = nil
+      }
+      throw error
+    }
+  }
+
+  /// File half of start, also exercised without opening a microphone in fixtures.
+  func startFile(at url: URL) throws {
     let created = try WavFile.create(at: url)
     lock.withLock {
       handle = created
@@ -98,14 +125,6 @@ final class LifelogRecorder: LifelogCapture, @unchecked Sendable {
       bytesSinceCheckpoint = 0
       writeError = nil
       activitySamples.removeAll(keepingCapacity: true)
-    }
-    do { try startEngine(preferredDeviceUID: preferredDeviceUID) } catch {
-      lock.withLock {
-        try? handle?.close()
-        handle = nil
-        outputURL = nil
-      }
-      throw error
     }
   }
 
@@ -264,23 +283,32 @@ final class LifelogRecorder: LifelogCapture, @unchecked Sendable {
     return sampleRate
   }
 
-  private func write(_ samples: [Int16]) {
+  func write(_ samples: [Int16]) {
     let data = samples.withUnsafeBufferPointer { Data(buffer: $0) }
+    var notification: (URL, String, @Sendable (URL, String) -> Void)?
     lock.lock()
-    defer { lock.unlock() }
+    defer {
+      lock.unlock()
+      if let (url, error, handler) = notification {
+        failureQueue.async { handler(url, error) }
+      }
+    }
     guard writeError == nil, let handle else { return }
     do {
-      try handle.write(contentsOf: data)
+      try writeData(handle, data)
       byteCount += data.count
       bytesSinceCheckpoint += data.count
       // Checkpoint every 10 s (meetings use 1 s): a crash loses at most the
       // header update, which `WavFile.repairHeader` restores on recovery.
       if bytesSinceCheckpoint >= Int(WavFile.sampleRate) * MemoryLayout<Int16>.size * 10 {
-        try WavFile.checkpoint(handle, bytes: byteCount)
+        try checkpoint(handle, byteCount)
         bytesSinceCheckpoint = 0
       }
     } catch {
       writeError = error
+      if let outputURL, let writeFailureHandler {
+        notification = (outputURL, error.localizedDescription, writeFailureHandler)
+      }
     }
   }
 }

@@ -19,10 +19,12 @@ private final class TestClock: @unchecked Sendable {
 private final class FakeCapture: LifelogCapture, @unchecked Sendable {
   var onSamples: (@Sendable ([Int16]) -> Void)?
   var onInterruption: (@Sendable () -> Void)?
+  var onWriteFailure: (@Sendable (URL, String) -> Void)?
   private(set) var current: URL?
   private(set) var starts = 0
   private(set) var stops = 0
   private(set) var rotations = 0
+  var failStop = false
   var failStart = false
   var segmentSeconds: TimeInterval = 60
 
@@ -46,13 +48,24 @@ private final class FakeCapture: LifelogCapture, @unchecked Sendable {
   }
 
   func stop() throws -> LifelogCaptureResult? {
+    if failStop { throw CocoaError(.fileWriteUnknown) }
     guard let previous = current else { return nil }
     current = nil
     stops += 1
     return LifelogCaptureResult(url: previous, seconds: segmentSeconds)
   }
 
-  func emitSound() { onSamples?(Array(repeating: 3_000, count: 1_600)) }
+  func emitSound() {
+    if let current { try! writeSignal(to: current) }
+    onSamples?(Array(repeating: 3_000, count: 1_600))
+  }
+}
+
+private func writeSignal(to url: URL) throws {
+  let handle = try WavFile.create(at: url)
+  let samples = Array(repeating: Int16(3000), count: 3200)
+  try handle.write(contentsOf: samples.withUnsafeBufferPointer { Data(buffer: $0) })
+  try WavFile.finalize(handle, bytes: samples.count * 2)
 }
 
 /// Returns one turn per call unless the next scripted result says otherwise.
@@ -110,7 +123,8 @@ private struct Harness {
   init(
     start: Date = date("2026-10-08T10:00:00+08:00"),
     settings: (inout LifelogSettings) -> Void = { _ in },
-    digestRequest: LifelogDigest.Request? = nil
+    digestRequest: LifelogDigest.Request? = nil,
+    transcribe overrideTranscribe: LifelogController.Transcribe? = nil
   ) {
     root = temporaryRoot()
     clock = TestClock(start)
@@ -125,7 +139,7 @@ private struct Harness {
     controller = LifelogController(
       defaults: defaults,
       capture: capture,
-      transcribe: { try await transcriber.transcribe($0, $1) },
+      transcribe: overrideTranscribe ?? { try await transcriber.transcribe($0, $1) },
       requestAccess: { true },
       transcriptionBlocker: { nil },
       digestRequest: { _ in request },
@@ -303,7 +317,7 @@ private struct Harness {
 @MainActor
 @Test func soundWithoutRecognizableSpeechIsMarkedEmptyAndCounted() async throws {
   let harness = Harness()
-  harness.transcriber.enqueue(.empty, .noUsableAudio)
+  harness.transcriber.enqueue(.empty, .empty)
   let controller = harness.controller
   await controller.setEnabled(true)
   for _ in 0..<2 {
@@ -451,7 +465,7 @@ private struct Harness {
   let store = LifelogStore(root: root, calendar: shanghai)
   let (segment, folder) = try store.createSegment(
     id: UUID(), startedAt: date("2026-10-08T09:00:00+08:00"))
-  try WavFile.create(at: store.audioURL(in: folder)).close()
+  try writeSignal(to: store.audioURL(in: folder))
   #expect(segment.status == .recording)
   #expect(store.pendingFolders() == [folder])
 
@@ -724,15 +738,16 @@ func lifelogDigestProbe() async throws {
 }
 
 @MainActor
-@Test func lifelogQuietRootChangeWritesCountersToOriginalRoot() async {
+@Test func lifelogQuietRootChangeRefusesToCloseCurrentSegment() async {
   let harness = Harness()
   await harness.controller.setEnabled(true)
   harness.clock.advance(30)
   var updated = harness.controller.settings
   updated.rootPath = harness.root.appending(path: "new-root").path
   await harness.controller.updateSettings(updated)
-  #expect(harness.store.dayStats("2026-10-08").silentSegmentsDiscarded == 1)
-  #expect(harness.store.segments(on: "2026-10-08").isEmpty)
+  #expect(harness.controller.settings.rootURL.path == harness.store.root.path)
+  #expect(harness.capture.isRunning)
+  #expect(harness.controller.lastError?.contains("drain") == true)
 }
 
 @Test func lifelogRejectsFilesystemRootWithoutReservedLocations() {
@@ -782,4 +797,346 @@ func lifelogDigestProbe() async throws {
     calendar: calendar, run: { _ in nil },
     transcribedCount: { $0 == "2026-11-01" ? 1 : 0 }, pendingCount: { _ in 0 })
   #expect(due.isEmpty)
+}
+
+// R1/R3 regressions: all audio and metadata are synthetic.
+@MainActor
+@Test func lifelogCorruptErrorIsFailureNotEmpty() async throws {
+  let h = Harness()
+  h.transcriber.enqueue(.noUsableAudio)
+  await h.controller.setEnabled(true)
+  h.capture.emitSound()
+  await h.controller.setEnabled(false)
+  await h.controller.waitForTranscriptions()
+  let item = try #require(h.closed("2026-10-08").first)
+  #expect(item.segment.status == .failed)
+  #expect(FileManager.default.fileExists(atPath: h.store.audioURL(in: item.folder).path))
+}
+
+@MainActor
+@Test func lifelogUnreadableSilentCloseKeepsAudio() async throws {
+  let h = Harness()
+  await h.controller.setEnabled(true)
+  let audio = try #require(h.capture.current)
+  try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: audio.path)
+  defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: audio.path) }
+  await h.controller.setEnabled(false)
+  let item = try #require(h.closed("2026-10-08").first)
+  #expect(item.segment.status == .failed)
+  #expect(FileManager.default.fileExists(atPath: audio.path))
+  #expect(h.store.dayStats("2026-10-08").silentSegmentsDiscarded == 0)
+}
+
+@MainActor
+@Test func lifelogRootChangeRejectsUnfinishedAndAllowsDrainedAndSameRoot() async throws {
+  for status in [LifelogSegment.Status.pending, .failed, .recording] {
+    let h = Harness()
+    var item = try h.store.createSegment(id: UUID(), startedAt: h.clock.now)
+    item.segment.status = status
+    try h.store.save(item.segment, in: item.folder)
+    var updated = h.controller.settings
+    updated.rootPath = h.root.appending(path: "other").path
+    await h.controller.updateSettings(updated)
+    #expect(h.controller.settings.rootURL.path == h.store.root.path)
+    #expect(h.controller.lastError?.contains("drain") == true)
+    var same = h.controller.settings
+    same.silenceThreshold = 240
+    await h.controller.updateSettings(same)
+    #expect(h.controller.settings.silenceThreshold == 240)
+    item.segment.status = .empty
+    try h.store.save(item.segment, in: item.folder)
+    await h.controller.updateSettings(updated)
+    #expect(h.controller.settings.rootURL == updated.rootURL)
+  }
+}
+
+private final class WriteFault: @unchecked Sendable {
+  private let lock = NSLock()
+  private var calls = 0
+  private var events: [(URL, String)] = []
+  func write(_ handle: FileHandle, _ data: Data) throws {
+    let fail = lock.withLock { calls += 1; return calls == 2 }
+    if fail { throw CocoaError(.fileWriteOutOfSpace) }
+    try handle.write(contentsOf: data)
+  }
+  func notify(_ url: URL, _ error: String) { lock.withLock { events.append((url, error)) } }
+  var notifications: [(URL, String)] { lock.withLock { events } }
+}
+
+@Test func lifelogRecorderFirstWriteAndCheckpointFailureNotifiesOnceOutsideLock() async throws {
+  for checkpointFailure in [false, true] {
+    let fault = WriteFault()
+    let recorder = LifelogRecorder(
+      writeData: { handle, data in
+        if checkpointFailure { try handle.write(contentsOf: data) }
+        else { try fault.write(handle, data) }
+      }, checkpoint: { _, _ in throw CocoaError(.fileWriteOutOfSpace) })
+    let root = temporaryRoot()
+    let audio = root.appending(path: "first.wav")
+    recorder.onWriteFailure = { [weak recorder] url, error in
+      // Reentering a lock-taking getter here proves notification is outside the lock.
+      _ = recorder?.isRunning
+      fault.notify(url, error)
+    }
+    try recorder.startFile(at: audio)
+    recorder.write(Array(repeating: 1000, count: 1600))
+    recorder.write(Array(repeating: 1000, count: checkpointFailure ? 160000 : 1600))
+    recorder.write(Array(repeating: 1000, count: 1600))
+    for _ in 0..<100 where fault.notifications.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+    #expect(fault.notifications.count == 1)
+    #expect(fault.notifications.first?.0 == audio)
+    let result = try #require(try recorder.stop())
+    #expect(result.writeError != nil)
+    #expect(result.seconds > 0)
+    #expect(try Data(contentsOf: audio).count > 44)
+    let next = root.appending(path: "next.wav")
+    try recorder.startFile(at: next)
+    recorder.write(Array(repeating: 1000, count: 1600))
+    #expect(try recorder.stop()?.writeError == nil)
+    #expect(try Data(contentsOf: next).count == 3244)
+  }
+}
+
+@MainActor
+@Test func lifelogSecondReadFailureThroughRealFinalEngineKeepsWAV() async throws {
+  let engine = FinalTranscriptionEngine(transcriber: NemotronTranscriber())
+  let h = Harness(transcribe: { audio, system in
+    // Reached only after controller's strict validation succeeded. Force the
+    // production final engine's strict guard to fail on its second read.
+    try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: audio.path)
+    defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: audio.path) }
+    return try await engine.process(microphone: audio, system: system, onDeviceOnly: true)
+  })
+  await h.controller.setEnabled(true)
+  h.capture.emitSound()
+  await h.controller.setEnabled(false)
+  await h.controller.waitForTranscriptions()
+  let item = try #require(h.closed("2026-10-08").first)
+  #expect(item.segment.status == .failed)
+  #expect(h.controller.lastError != nil)
+  #expect(FileManager.default.fileExists(atPath: h.store.audioURL(in: item.folder).path))
+}
+
+@MainActor
+@Test func lifelogRecoveryRejectsCorruptAndUnrepairableHeaders() async throws {
+  for fault in ["header", "short", "odd", "repair-permission", "read-permission"] {
+    let h = Harness()
+    let item = try h.store.createSegment(id: UUID(), startedAt: h.clock.now)
+    let audio = h.store.audioURL(in: item.folder)
+    try writeSignal(to: audio)
+    var data = try Data(contentsOf: audio)
+    switch fault {
+    case "header": data[0] = 0; try data.write(to: audio)
+    case "short": try Data([0, 1]).write(to: audio)
+    case "odd": data.append(0); try data.write(to: audio)
+    case "repair-permission": try FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: audio.path)
+    default: try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: audio.path)
+    }
+    h.controller.activate(observeSystem: false)
+    await h.controller.waitForTranscriptions()
+    #expect(try h.store.load(folder: item.folder).status == .failed)
+    #expect(h.transcriber.calls == 0)
+    #expect(FileManager.default.fileExists(atPath: audio.path))
+    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: audio.path)
+  }
+}
+
+@MainActor
+@Test func lifelogRecoveryRepairsOnlySizesAndRecognizesTrueSilence() async throws {
+  for silent in [true, false] {
+    let h = Harness()
+    let item = try h.store.createSegment(id: UUID(), startedAt: h.clock.now)
+    let audio = h.store.audioURL(in: item.folder)
+    let handle = try WavFile.create(at: audio)
+    let samples = Array(repeating: Int16(silent ? 0 : 3000), count: 3200)
+    try handle.write(contentsOf: samples.withUnsafeBufferPointer { Data(buffer: $0) })
+    try handle.close() // Intentionally stale size fields, exactly like a crash.
+    h.controller.activate(observeSystem: false)
+    await h.controller.waitForTranscriptions()
+    let saved = try h.store.load(folder: item.folder)
+    #expect(saved.status == (silent ? .empty : .complete))
+    #expect(saved.audioSeconds == 0.2)
+    #expect(h.transcriber.calls == (silent ? 0 : 1))
+    #expect(!FileManager.default.fileExists(atPath: audio.path))
+  }
+}
+
+@MainActor
+@Test func lifelogStopFailureMustNotDiscardApparentlySilentAudio() async throws {
+  let h = Harness()
+  await h.controller.setEnabled(true)
+  let audio = try #require(h.capture.current)
+  h.capture.failStop = true
+  await h.controller.setEnabled(false)
+  #expect(FileManager.default.fileExists(atPath: audio.path))
+  #expect(h.closed("2026-10-08").first?.segment.status == .failed)
+  h.capture.failStop = false
+  _ = try h.capture.stop()
+}
+
+/// Uses the real recorder's file writer, notification and stop/rotation. Only
+/// startEngine is replaced so fixtures never request a microphone or open a tap.
+private final class FileCapture: LifelogCapture {
+  let recorder: LifelogRecorder
+  var onSamples: (@Sendable ([Int16]) -> Void)? {
+    get { recorder.onSamples }
+    set { recorder.onSamples = newValue }
+  }
+  var onInterruption: (@Sendable () -> Void)? {
+    get { recorder.onInterruption }
+    set { recorder.onInterruption = newValue }
+  }
+  var onWriteFailure: (@Sendable (URL, String) -> Void)? {
+    get { recorder.onWriteFailure }
+    set { recorder.onWriteFailure = newValue }
+  }
+  var isRunning: Bool { current != nil }
+  private(set) var current: URL?
+  init(_ recorder: LifelogRecorder) { self.recorder = recorder }
+  func start(writingTo url: URL, preferredDeviceUID: String?) throws {
+    try recorder.startFile(at: url)
+    current = url
+  }
+  func rotate(to url: URL) throws -> LifelogCaptureResult {
+    let result = try recorder.rotate(to: url)
+    current = url
+    return result
+  }
+  func stop() throws -> LifelogCaptureResult? {
+    let result = try recorder.stop()
+    current = nil
+    return result
+  }
+}
+
+@MainActor
+@Test func lifelogWriteFailureClosesFailedPrefixRetriesAndIgnoresStaleEvent() async throws {
+  let h = Harness()
+  let fault = WriteFault()
+  let capture = FileCapture(LifelogRecorder(writeData: { try fault.write($0, $1) }))
+  let clock = h.clock
+  let controller = LifelogController(
+    defaults: h.defaults, capture: capture, transcribe: { _, _ in [] },
+    requestAccess: { true }, transcriptionBlocker: { nil }, digestRequest: { _ in nil },
+    reservedRoots: { [] }, now: { clock.now }, calendar: shanghai)
+  await controller.setEnabled(true)
+  let original = try #require(capture.current)
+  capture.recorder.write(Array(repeating: 3000, count: 3200))
+  capture.recorder.write(Array(repeating: 3000, count: 3200))
+  for _ in 0..<100 where controller.phase == .recording { try await Task.sleep(for: .milliseconds(5)) }
+  guard case .retrying = controller.phase else { Issue.record("First write error not visible"); return }
+  #expect(controller.lastError?.contains("Audio write failed") == true)
+  #expect(!capture.isRunning)
+  #expect(try h.store.load(folder: original.deletingLastPathComponent()).status == .failed)
+  #expect(try Data(contentsOf: original).count == 6444)
+  clock.advance(LifelogController.retryInterval - 1)
+  controller.tick()
+  #expect(!capture.isRunning)
+  clock.advance(1)
+  controller.tick()
+  await controller.waitForStart()
+  let next = try #require(capture.current)
+  #expect(next != original)
+  capture.onWriteFailure?(original, "delayed old error")
+  try await Task.sleep(for: .milliseconds(10))
+  #expect(controller.phase == .recording)
+  #expect(capture.current == next)
+  capture.recorder.write(Array(repeating: 3000, count: 3200))
+  controller.shutdown()
+  #expect(try h.store.load(folder: next.deletingLastPathComponent()).status == .pending)
+  #expect(try Data(contentsOf: next).count == 6444)
+}
+
+private actor TranscriptionGate {
+  var entered = false
+  private var continuation: CheckedContinuation<Void, Never>?
+  func wait() async { entered = true; await withCheckedContinuation { continuation = $0 } }
+  func release() { continuation?.resume(); continuation = nil }
+}
+
+@MainActor
+@Test func lifelogRootChangeRejectsInflightEvenIfMetadataAlreadyComplete() async throws {
+  let gate = TranscriptionGate()
+  let h = Harness(transcribe: { _, _ in await gate.wait(); return [] })
+  await h.controller.setEnabled(true)
+  h.capture.emitSound()
+  await h.controller.setEnabled(false)
+  for _ in 0..<100 {
+    if await gate.entered { break }
+    try await Task.sleep(for: .milliseconds(5))
+  }
+  #expect(await gate.entered)
+  var item = try #require(h.closed("2026-10-08").first)
+  // Disk alone now looks drained; the in-flight task must still prevent switching.
+  item.segment.status = .complete
+  try h.store.save(item.segment, in: item.folder)
+  var updated = h.controller.settings
+  updated.rootPath = h.root.appending(path: "other").path
+  await h.controller.updateSettings(updated)
+  #expect(h.controller.settings.rootURL.path == h.store.root.path)
+  await gate.release()
+  await h.controller.waitForTranscriptions()
+  await h.controller.updateSettings(updated)
+  #expect(h.controller.settings.rootURL == updated.rootURL)
+}
+
+@MainActor
+@Test func lifelogRootChangeRejectsBlockedQueueAndLeavesSettingsDurable() async throws {
+  let h = Harness()
+  var item = try h.store.createSegment(id: UUID(), startedAt: h.clock.now)
+  item.segment.status = .pending
+  try h.store.save(item.segment, in: item.folder)
+  try writeSignal(to: h.store.audioURL(in: item.folder))
+  let controller = LifelogController(
+    defaults: h.defaults, capture: FakeCapture(), transcribe: { _, _ in [] },
+    requestAccess: { true }, transcriptionBlocker: { "fixture blocker" },
+    digestRequest: { _ in nil }, reservedRoots: { [] })
+  controller.activate(observeSystem: false)
+  await controller.waitForTranscriptions()
+  // Queue survives even if an external metadata change looks complete.
+  item.segment.status = .complete
+  try h.store.save(item.segment, in: item.folder)
+  var updated = controller.settings
+  updated.rootPath = h.root.appending(path: "other").path
+  await controller.updateSettings(updated)
+  #expect(controller.settings.rootURL.path == h.store.root.path)
+  #expect(LifelogSettingsStore.load(from: h.defaults).rootURL.path == h.store.root.path)
+  controller.shutdown()
+}
+
+@MainActor
+@Test func lifelogRepairFailureCanBeRetriedAfterPermissionRestored() async throws {
+  let h = Harness()
+  let item = try h.store.createSegment(id: UUID(), startedAt: h.clock.now)
+  let audio = h.store.audioURL(in: item.folder)
+  let handle = try WavFile.create(at: audio)
+  try handle.write(contentsOf: Array(repeating: Int16(3000), count: 3200).withUnsafeBufferPointer { Data(buffer: $0) })
+  try handle.close()
+  try FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: audio.path)
+  h.controller.activate(observeSystem: false)
+  await h.controller.waitForTranscriptions()
+  #expect(try h.store.load(folder: item.folder).status == .failed)
+  try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: audio.path)
+  h.controller.retryFailedSegments()
+  await h.controller.waitForTranscriptions()
+  #expect(try h.store.load(folder: item.folder).status == .complete)
+}
+
+@MainActor
+@Test func lifelogSameRootAliasDoesNotQueueTheActiveRecording() async throws {
+  let h = Harness()
+  await h.controller.setEnabled(true)
+  h.capture.emitSound()
+  let alias = h.root.appending(path: "same-root-alias")
+  try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: h.store.root)
+  var updated = h.controller.settings
+  updated.rootPath = alias.path
+  updated.silenceThreshold = 240
+  await h.controller.updateSettings(updated)
+  await h.controller.waitForTranscriptions()
+  #expect(h.transcriber.calls == 0)
+  #expect(h.controller.settings.silenceThreshold == 240)
+  #expect(h.capture.isRunning)
+  #expect(h.store.segments(on: "2026-10-08").first?.segment.status == .recording)
+  h.controller.shutdown()
 }

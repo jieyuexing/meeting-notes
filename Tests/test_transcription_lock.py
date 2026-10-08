@@ -67,6 +67,26 @@ class TranscriptionLockTests(unittest.TestCase):
         self.assertEqual(child.wait(timeout=5), 1)
         self.assertNotIn('entered', child.stdout.read())
 
+    def test_local_only_strict_read_error_never_becomes_no_audio_or_enters_asr(self):
+        for sensevoice in ('0', '1'):
+            with self.subTest(sensevoice=sensevoice):
+                child = self.child(FIXTURE_LOCAL_ONLY='1', FIXTURE_STRICT_READ_ERROR='1',
+                                   FIXTURE_SENSEVOICE=sensevoice)
+                line = self.line(child)
+                self.assertTrue(line.startswith('error:'), line)
+                self.assertIn('Code=257', line)
+                self.assertEqual(child.wait(timeout=5), 1)
+                self.assertNotIn('entered', child.stdout.read())
+
+    def test_lifelog_transient_read_error_is_not_retried_as_an_asr_fallback(self):
+        child = self.child(FIXTURE_LOCAL_ONLY='1', FIXTURE_SENSEVOICE='1',
+                           FIXTURE_STRICT_READ_ONCE='1')
+        line = self.line(child)
+        self.assertTrue(line.startswith('error:'), line)
+        self.assertIn('Code=257', line)
+        self.assertEqual(child.wait(timeout=5), 1)
+        self.assertNotIn('entered', child.stdout.read())
+
     def test_same_meeting_waits_across_real_processes(self):
         first = self.child()
         self.assertEqual(self.line(first), 'entered')

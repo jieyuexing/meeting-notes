@@ -44,3 +44,16 @@
   verification use `scripts/build-app.sh` in a task-directory APFS clone (it deletes
   the clone's app bundle), never against the running canonical app. Set TMPDIR/TMP/TEMP
   to the root task `.local/tmp/lifelog-24h/tmp`; document platform test-runner temp overrides.
+
+- MEET-4 read/write failures or root switching (R1–R3): run the strict Swift suite
+  above and `PYTHONDONTWRITEBYTECODE=1 python3 Tests/test_transcription_lock.py`
+  → `FORK.md` “MEET-4 常开模式”, root task `FIXES.md`. Never treat a read/repair
+  error as silence; lifelog final-engine reads must remain throwing under the lock.
+  Preserve first-write-error async notification outside the audio lock and stale-URL
+  rejection. Root changes require stopped capture and drained current/inflight/queued/
+  failed work; same-root aliases must not enqueue active audio.
+- Missing-process metrics (R4): from the Universe root run
+  `python3 -I .local/tmp/lifelog-24h/bin/verify-report.py`
+  → `.local/tmp/lifelog-24h/RUNBOOK.md` and `FIXES.md`. This mocks ps/power and
+  reads only synthetic fixtures. No-PID CPU/RSS are missing, including old CSV zeros;
+  keep disk statistics independent. Never run live sample.py as a fixture check.
