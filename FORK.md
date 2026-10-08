@@ -50,6 +50,63 @@ OpenCode 帮助将 prompt 声明为位置参数，所以此示例显式把 stdin
 
 委托接口依据 [Sparkle 官方 SPUUpdaterDelegate 文档](https://sparkle-project.org/documentation/api-reference/Protocols/SPUUpdaterDelegate.html)，并核对本地解析的 Sparkle 2.10.0 源码。`SUPublicEDKey`、bundle ID、签名脚本均未改；仅将 plist 设为 false 不足以覆盖旧偏好，因此委托门禁必须保留。真正的窗口操作与安装由协调者后续验收。
 
+## 最终转写的跨进程锁（2026-10-07）
+
+录音结束定稿与恢复录音共用 `FinalTranscriptionEngine.process(microphone:system:)`。
+该入口在读取/转写之前取得录音目录内 `.transcription.lock` 的内核 `flock`，持有到两个音轨的最终转写返回或抛错。
+目录路径先解析符号链接、去重并排序；同一录音目录跨进程互斥，不同目录仍可并行。实时预览的
+`LiveTranscriptionEngine` 与 `SerialAudioBatchQueue` 不参与此锁，摘要与归档也不在锁范围内。
+
+竞争时异步等待（50ms 检查一次），不阻塞 Swift executor，也不把“忙”直接标成会议失败。取消等待会释放已取得的部分锁；
+转写中的取消在已有异步边界和本机音频分块之间检查，云端取消不会触发本机回退。普通云端错误仍按上游逻辑回退。
+成功、错误、取消均由描述符生命周期释放，进程崩溃由内核释放；锁文件永久保留，不按时间/PID 抢占，也不手工删除活跃锁文件。
+这只是最终转写阶段的互斥，不保证整个会议归档流程的跨进程事务、去重或资源全局调度；旧版 app 不识别新锁，不能与新版混跑。
+
+隔离验证入口（在本 fork 根运行，三个临时环境变量须指向总仓本轮任务目录）：
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 Tests/test_transcription_lock.py
+```
+
+该测试用 `xcrun swiftc -swift-version 6 -strict-concurrency=complete -warnings-as-errors` 编译原样提取的
+`FinalTranscriptionEngine`、真实锁实现和假 ASR，真实子进程覆盖互斥、不同会议并行、取消、错误、崩溃释放、符号链接别名。
+测试不构建/运行 app、不解析依赖、不加载模型、不读真实音频。2026-10-07 已先在未加锁入口复现失败，再验证 10 项通过。
+应用整体构建、稳定启动、真实 ASR 与录音恢复验收须另按 `AGENTS.md` 的 stable-build 流程处理；本轮未执行。
+
+## 最终转写文本权威与 CJK 接缝（2026-10-07）
+
+流式 Nemotron partial 会回改或截短此前的假设，故只用于实时预览。归档阶段调用
+FluidAudio 0.15.7 的 `finishWithTokenTimings()`，最终文本只取其 `text`；不会把 partial
+片段带入最终 `Result.segments`。token timings 只在能无损复原最终文本、时间有限且单调时生成按
+安全英文/CJK 接缝分开的约 10 秒连续切片，并裁剪到音频 duration；缺失、无效或文本不一致时退回为
+`0...duration` 的完整最终文本单段。这样不丢字、不把错误 partial 拼回去，也不按英语词边界拆开中文
+或新插空格。既有
+`VocabularyTextCorrector` 仍同时作用于最终文本和该完整段。
+
+Nemotron 的 token timings 使用与上游 `NemotronMultilingualTokenizer.decode(ids:)` 相同的
+SentencePiece 表示：每个 piece 内的 `▁` 为 ASCII 空格，跨 piece 的连续 ASCII 空格折叠为一个。
+然后仍要求结果与最终文本严格相等；这不是忽略空白的比较。独立尾部 `▁` 只在最后一个片段上移除，
+中间片段的显式英文前导空格保留给 formatter。这样真实、有效的时标不会因 tokenizer 自己的双空格
+表示而退回整轨，同时不能以时标重写任何模型字符。
+
+`TranscriptFormatter` 对相邻 CJK 字符紧接，不应用原先针对拉丁文字残片的短词启发，以避免将
+“和背景音乐”显示成“和背 景音乐”。这仅修复展示接缝，不能替代或掩盖 ASR 对字符的识别错误。
+
+逻辑验证（不启动 app、不加载模型或音频）：
+
+```sh
+swift test --disable-automatic-resolution --filter final
+swift test --disable-automatic-resolution --filter transcriptFormatter
+```
+
+覆盖最终文本权威、中文/英文标点、Unicode、空文本、缺失/不匹配/无效 timings 回退及 duration 裁剪；
+真实录音的 token timing 精度仍须用保留在本机的非敏感 WAV 单独验收。
+
+`LocalTranscriptionProbeTests.swift` 是显式授权时的本地验收入口，默认没有环境变量即返回，
+不会读音频、发现缓存或下载模型。授权运行时只传绝对的 WAV、完整本地模型 variant 目录和根任务报告路径；
+它记录 raw final、token timings、旧 partial 的 appendDelta 模拟和生产 archive 边界结果。测试中不得
+固化真实录音内容。
+
 ## 改动过的上游文件
 
 - `Sources/MeetingNotes/OpenAIEnricher.swift`：入口按后端检查、请求分派、样例测试入口、后端来源标记；沿用上游提示词、schema、分块和解码结构。
@@ -57,12 +114,13 @@ OpenCode 帮助将 prompt 声明为位置参数，所以此示例显式把 stdin
 - `Sources/MeetingNotes/AppModel.swift`：补摘要的登录检查仅限 Codex，并在批次中检查关闭状态。
 - `Sources/MeetingNotes/MeetingStore.swift`：关闭时两处补摘要候选查询返回空。
 - `Resources/Info.plist`：关闭自动更新默认值，换 fork 空源。
+- `Sources/MeetingNotes/TranscriptionEngine.swift`：最终转写入口取得录音目录锁，补充取消检查；实时队列不变。
 
-新增文件：`SummaryBackendSettings.swift`、`CommandSummaryBackend.swift`、`SummaryBackendSettingsView.swift`、`ForkUpdatePolicy.swift`、两份 `Tests/MeetingNotesTests/*Tests.swift`、`fork-appcast.xml`、本说明。
+新增文件：`SummaryBackendSettings.swift`、`CommandSummaryBackend.swift`、`SummaryBackendSettingsView.swift`、`ForkUpdatePolicy.swift`、`TranscriptionLock.swift`、两份 `Tests/MeetingNotesTests/*Tests.swift`、`Tests/test_transcription_lock.py`、`Tests/TranscriptionLockFixtures.swift`、`fork-appcast.xml`、本说明。
 
 ## 同步上游与验证
 
-同步新正式 tag 时优先检查以上五个接入文件；确认上游没有绕开 `OpenAIEnricher` 的新摘要路径，新的补摘要任务是否也处理 off。检查 `GeneratedInsights` / schema / `generationTimeout` 的变动，确认命令与 Codex 仍共用同一合同。检查 Sparkle 是否仍使用 `UpdateChannelDelegate`、是否新增替代更新入口；保留委托拒绝、空源及稳定版/Beta 的隔离。不得用上游 `Info.plist` 覆盖自建版更新策略。原有分块 checkpoint 未新增后端维度；更换后端后继续旧失败任务可能复用既有部分摘要。
+同步新正式 tag 时优先检查以上六个接入文件；确认上游没有绕开 `OpenAIEnricher` 的新摘要路径，新的补摘要任务是否也处理 off。检查 `GeneratedInsights` / schema / `generationTimeout` 的变动，确认命令与 Codex 仍共用同一合同。检查 Sparkle 是否仍使用 `UpdateChannelDelegate`、是否新增替代更新入口；保留委托拒绝、空源及稳定版/Beta 的隔离。检查停止录音和恢复路径是否仍共用 `FinalTranscriptionEngine.process`，保留文件锁与取消传播。不得用上游 `Info.plist` 覆盖自建版更新策略。原有分块 checkpoint 未新增后端维度；更换后端后继续旧失败任务可能复用既有部分摘要。
 
 常规验证入口：`swift build`、`swift test`、`scripts/build-app.sh`。构建脚本只打包与签名，本轮不运行 `scripts/stable-build.sh`，不启动 app、不申请系统权限、不录音。开发调试只测 Swift 逻辑，不把测试通过或代码签名通过当作录音和 UI 验收。
 

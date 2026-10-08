@@ -72,14 +72,16 @@ enum TranscriptFormatter {
           text = entry.text
           continue
         }
-        let tight = joinsWithoutSpace(text, entry.text, vocabulary: vocabulary)
+        let hasExplicitBoundary = entry.text.first?.isWhitespace == true
+        let tight = !hasExplicitBoundary && joinsWithoutSpace(text, entry.text, vocabulary: vocabulary)
+        let cjkSeam = joinsCJKSeam(text, entry.text)
         // A line may only end at a real word boundary; closing it mid-word
         // would recreate exactly the split this merge exists to repair.
         // Past the window it also waits for the end of a sentence, so a line
         // rarely stops halfway through a thought ("Ik heb een" / "jaar.").
         let elapsed = entry.turn.start - currentStart
         let closes =
-          !tight
+          (!tight || cjkSeam)
           && elapsed >= window
           && (endsSentence(text) || elapsed >= maximumLineSpan)
         if closes {
@@ -88,7 +90,7 @@ enum TranscriptFormatter {
           speaker = entry.turn.speaker
           text = entry.text
         } else {
-          text += (tight ? "" : " ") + entry.text
+          text += (tight ? "" : " ") + entry.text.trimmingCharacters(in: .whitespacesAndNewlines)
         }
       }
       if let currentStart = start {
@@ -133,11 +135,14 @@ enum TranscriptFormatter {
 
   /// Removes the recognizer's unknown-token marker and normalizes whitespace.
   static func cleanFragment(_ text: String) -> String {
-    text
+    let startsWithWhitespace = text.first?.isWhitespace == true
+    let cleaned = text
       .replacingOccurrences(of: "<unk>", with: " ")
       .components(separatedBy: .whitespacesAndNewlines)
       .filter { !$0.isEmpty }
       .joined(separator: " ")
+    guard !cleaned.isEmpty else { return "" }
+    return startsWithWhitespace ? " " + cleaned : cleaned
   }
 
   private static func tidy(_ text: String) -> String {
@@ -154,7 +159,7 @@ enum TranscriptFormatter {
     guard let last = text.trimmingCharacters(in: .whitespacesAndNewlines).last else {
       return false
     }
-    return ".!?".contains(last)
+    return ".!?。！？".contains(last)
   }
 
   /// Words that appear in the interior of a fragment are surrounded by spaces
@@ -184,6 +189,10 @@ enum TranscriptFormatter {
     _ previous: String, _ next: String, vocabulary: Set<String>
   ) -> Bool {
     guard let lastCharacter = previous.last, let firstCharacter = next.first else { return false }
+    // CJK scripts do not use spaces between words. The English-oriented
+    // incomplete-word heuristic below otherwise turns one Chinese sentence
+    // into a false seam such as "和背 景音乐".
+    if isCJK(lastCharacter), isCJK(firstCharacter) { return true }
     // Trailing punctuation belongs to the word it follows: ". Die waren" must
     // not start a line with a stray period.
     if !firstCharacter.isLetter && !firstCharacter.isNumber { return true }
@@ -205,5 +214,20 @@ enum TranscriptFormatter {
     if last.count <= 3 && !vocabulary.contains(last) { return true }
     if first.count <= 3 && !vocabulary.contains(first) { return true }
     return false
+  }
+
+  private static func isCJK(_ character: Character) -> Bool {
+    character.unicodeScalars.contains {
+      (0x3400...0x4DBF).contains($0.value) || (0x4E00...0x9FFF).contains($0.value)
+        || (0xF900...0xFAFF).contains($0.value) || (0x3040...0x30FF).contains($0.value)
+        || (0xAC00...0xD7AF).contains($0.value)
+    }
+  }
+
+  private static func joinsCJKSeam(_ previous: String, _ next: String) -> Bool {
+    guard let last = previous.trimmingCharacters(in: .whitespacesAndNewlines).last,
+      let first = next.trimmingCharacters(in: .whitespacesAndNewlines).first
+    else { return false }
+    return isCJK(first) && (isCJK(last) || "。！？".contains(last))
   }
 }

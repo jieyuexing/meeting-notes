@@ -61,7 +61,9 @@ actor NemotronTranscriber {
   }
 
   func transcribe(_ url: URL) async throws -> Result {
+    try Task.checkCancellation()
     let manager = try await makeSession()
+    try Task.checkCancellation()
     let handle = try FileHandle(forReadingFrom: url)
     defer { try? handle.close() }
     try handle.seek(toOffset: 44)
@@ -69,41 +71,54 @@ actor NemotronTranscriber {
     let samplesPerChunk = Self.sampleRate * Self.chunkMilliseconds / 1_000
     let bytesPerChunk = samplesPerChunk * MemoryLayout<Int16>.size
     var sampleCount = 0
-    var emittedThrough: TimeInterval = 0
-    var previousText = ""
-    var segments: [Segment] = []
-
     while let data = try handle.read(upToCount: bytesPerChunk), !data.isEmpty {
+      try Task.checkCancellation()
       let samples = Self.floatSamples(from: data)
       guard !samples.isEmpty else { continue }
       sampleCount += samples.count
       _ = try await manager.process(samples: samples)
-      let partial = await manager.getPartialTranscript()
-      appendDelta(
-        in: partial,
-        previousText: &previousText,
-        emittedThrough: &emittedThrough,
-        currentTime: Double(sampleCount) / Double(Self.sampleRate),
-        segments: &segments)
     }
 
-    let finalText = try await manager.finish()
+    try Task.checkCancellation()
+    let finalized = try await manager.finishWithTokenTimings()
+    let finalText = finalized.text
     let duration = Double(sampleCount) / Double(Self.sampleRate)
-    appendDelta(
-      in: finalText,
-      previousText: &previousText,
-      emittedThrough: &emittedThrough,
-      currentTime: duration,
-      segments: &segments)
-    let correctedText = VocabularyTextCorrector.apply(to: finalText)
-    let correctedSegments = segments.map {
-      Segment(start: $0.start, end: $0.end, text: VocabularyTextCorrector.apply(to: $0.text))
-    }
-    return Result(text: correctedText, duration: duration, segments: correctedSegments)
+    return Self.archiveResult(text: finalText, tokenTimings: finalized.timings, duration: duration)
   }
 
   func invalidateVocabulary() {
     VocabularyTextCorrector.invalidate()
+  }
+
+  /// The final archive deliberately ignores every streaming partial: the ASR
+  /// may revise or truncate that hypothesis before `finish` returns.
+  nonisolated static func archiveResult(
+    text: String, tokenTimings: [TokenTiming], duration: TimeInterval
+  ) -> Result {
+    archiveResult(
+      text: text, tokenTimings: tokenTimings, duration: duration,
+      correcting: VocabularyTextCorrector.apply)
+  }
+
+  nonisolated static func archiveResult(
+    text: String, tokenTimings: [TokenTiming], duration: TimeInterval,
+    correcting: (String) -> String
+  ) -> Result {
+    let finalText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    let correctedText = correcting(finalText)
+    let finalSegments = FinalTranscriptSegments.authoritative(
+      text: finalText, tokenTimings: tokenTimings, duration: duration)
+    let correctedSegments = finalSegments.map {
+      Segment(start: $0.start, end: $0.end, text: correcting($0.text))
+    }
+    // A replacement can span a segment seam. Keep final text authoritative if
+    // applying the existing vocabulary rules per segment would split it.
+    if correctedSegments.map(\.text).joined() != correctedText {
+      return Result(
+        text: correctedText, duration: duration,
+        segments: correctedText.isEmpty ? [] : [Segment(start: 0, end: max(0, duration), text: correctedText)])
+    }
+    return Result(text: correctedText, duration: duration, segments: correctedSegments)
   }
 
   nonisolated static func appendedText(previous: String, current: String) -> String {
@@ -576,17 +591,26 @@ actor FinalTranscriptionEngine {
   }
 
   func process(microphone: URL, system: URL) async throws -> [TranscriptTurn] {
+    let leases = try await TranscriptionLock.acquire(audioURLs: [microphone, system])
+    defer { withExtendedLifetime(leases) {} }
+    try Task.checkCancellation()
     if TranscriptionEngineSettingsStore.load() == .openAI,
       let apiKey = OpenAITranscribeKeychainStore.load(), !apiKey.isEmpty {
       do {
-        return try await processWithOpenAI(microphone: microphone, system: system, apiKey: apiKey)
+        let turns = try await processWithOpenAI(microphone: microphone, system: system, apiKey: apiKey)
+        try Task.checkCancellation()
+        return turns
+      } catch is CancellationError {
+        throw CancellationError()
       } catch {
+        try Task.checkCancellation()
         // The WAVs stay on disk; a failed API call must never lose a meeting.
         // Fall back to on-device transcription.
       }
     }
     let mic = try await transcribeIfUsable(microphone)
     let remote = try await transcribeIfUsable(system)
+    try Task.checkCancellation()
 
     guard mic != nil || remote != nil else { throw CocoaError(.fileReadCorruptFile) }
     let micTurns = mic.map { Self.turns(from: $0, source: .microphone) } ?? []
@@ -603,6 +627,7 @@ actor FinalTranscriptionEngine {
     var turns: [TranscriptTurn] = []
     for (url, source) in [(microphone, TranscriptTurn.Source.microphone), (system, .system)]
     where Self.hasUsableAudio(url) {
+      try Task.checkCancellation()
       let pieces = try await OpenAITranscriber.transcribe(url: url, apiKey: apiKey)
       turns += pieces.map { piece in
         TranscriptTurn(
@@ -619,6 +644,7 @@ actor FinalTranscriptionEngine {
   }
 
   private func transcribeIfUsable(_ url: URL) async throws -> NemotronTranscriber.Result? {
+    try Task.checkCancellation()
     guard Self.hasUsableAudio(url) else { return nil }
     return try await transcriber.transcribe(url)
   }
@@ -642,8 +668,8 @@ actor FinalTranscriptionEngine {
     }
 
     return result.segments.compactMap { segment in
-      let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !text.isEmpty else { return nil }
+      let text = segment.text.trimmingCharacters(in: .newlines)
+      guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
       return TranscriptTurn(
         start: segment.start, end: segment.end,
         speaker: "Unknown", text: text, source: source)
