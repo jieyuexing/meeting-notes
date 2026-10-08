@@ -54,7 +54,7 @@
   SwiftPM's test runner may override TMPDIR, so the explicit test variable is required.
   Keep the primary start/stop independent of meeting title. Unified media closes
   before ASR; both WAVs use the existing local-only final-engine lock. Screen files
-  have a separate subroot and a capacity pause, never automatic deletion. T3 polls
+  have a separate subroot and a capacity pause; screen text (below) owns deletion. T3 polls
   local `t3ctl m3max observe` without an agent/model loop and fails independently.
   Selection outputs live under `selections/<id>/`, reference final transcripts,
   and use only the configured daily-digest command; no second ASR or cloud fallback.
@@ -66,6 +66,17 @@
   Integration evidence: root `.local/tmp/lifelog-unified-capture/INTEGRATE-RECORD.md`.
   No deployment or restart during the 2026-10-08/09 24-hour experiment.
 
+- Screen text / video deletion (MEET-5: keyframe dedupe, Vision OCR, `screen-text.*`,
+  `segment.json` `screenText`/`screenDeletedAt`, Today screen-text row, digest/selection
+  `[screen N]` evidence limits): strict Swift suite above (`--filter 'ScreenText|screenText|
+  Unified|[Dd]igest|[Ss]election'` for a focused pass) and the localization test
+  → `FORK.md` “画面转文字后删除视频（MEET-5）”. Audio-side saves must use
+  `saveKeepingScreen`; screen-side writes only `LifelogStore.update(in:)`. Legacy segments
+  without `screenText` are never processed by launch recovery. Real Vision check is the
+  opt-in `screenTextVisionProbe` (`MEETING_NOTES_SCREEN_OCR_VIDEO`, `MEETING_NOTES_SCREEN_OCR_OUT`);
+  feed only synthetic video, outputs under the root task `.local/tmp/`; evidence and
+  probe generator: root `.local/tmp/lifelog-screen-ocr/RECORD.md`. Never record a real screen
+  or upload frames/text for this check.
 - MEET-4 read/write failures or root switching (R1–R3): run the strict Swift suite
   above and `PYTHONDONTWRITEBYTECODE=1 python3 Tests/test_transcription_lock.py`
   → `FORK.md` “MEET-4 常开模式”, root task `FIXES.md`. Never treat a read/repair

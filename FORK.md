@@ -182,9 +182,47 @@ MEETING_NOTES_TEST_COMMAND="<摘要命令>" MEETING_NOTES_TRANSLATION_INPUT=/abs
 
 普通 `swift test` 跳过真实 CLI 样例，覆盖 JSON 提取、设置默认值与读写、stdin 大输入、非零退出、超时、取消、生产解码及更新门禁。真实调用日志和执行结论在总仓 `.local/tmp/meeting-notes/RECORD.md`；长期维护合同以本文件为准。
 
+## 画面转文字后删除视频（MEET-5，2026-10-08）
+
+本节替代下节“统一日常记录”中关于屏幕的旧描述（“屏幕仅回看引用，不做 OCR”“screen 不随之删除”“容量上限不是删除策略”）；其余采集合同不变。用户 2026-10-08 决定：屏幕录像按**分段**转文字（不按小时/天、不实时），成功后删视频只留文字，失败保留视频可重试，10 GB 上限保留作异常兜底；默认 OCR 用本机 Apple Vision，本地视觉模型描述画面本轮不做。
+
+**处理时机与队列。** `LifelogController.closeUnified` 在 `UnifiedSegmentCapture.stop()` 返回（WAV 与每个 asset writer 已收尾）并写好 `segment.json` 后，把该段放进独立的串行 `screenQueue`（`.utility` 优先级）。与音频 ASR 队列**并行**，理由：OCR 永远本机、不需要 `TranscriptionLock`，不能被“选了 OpenAI 引擎”的音频门禁卡住，也不该排在长 ASR 后面或拖慢逐字稿；两队列各自串行，峰值为一段 ASR + 一段 OCR。抽帧/识别在主线程之外，录音不受阻塞。纯静音桌面段、音频或媒体失败的段同样处理（画面独立于语音；截断的 mp4 读不出时单独记失败并保留）。`UnifiedCapture.swift` 未改。
+
+**抽帧、去重与识别（`ScreenTextExtractor.swift`）。** `AVAssetReader` 按序解码每个 `screen-<displayID>.mp4`（32BGRA），每秒最多分析一帧（`sampleInterval` 1 s，容忍 0.05 s 抖动）；指纹为 64×36 亮度网格（每格 3×3 采样均值）。与**上一关键帧**（不是上一帧）比较：单格亮度差 >16 记为变化，变化格 ≥0.4%（约 9/2304 格）且距上一关键帧 ≥3 s 才成为关键帧——光标、菜单栏时钟低于阈值，新增一行文字/换窗口高于阈值；持续变化（滚动、视频）最多每 3 s 识别一次，缓慢累积的变化最终也会触发。只对关键帧调用 `VNRecognizeTextRequest`（accurate，`zh-Hans, ja-JP, en-US`，语言校正开，`automaticallyDetectsLanguage = true`——探针证实固定语言列表会整行丢日文或把中文识成日文字形），置信度 <0.3、空白和同帧重复行去掉；阅读顺序为自上而下分行、行内自左向右，每个识别框一行（并排窗口按行交错，不在一行内拼接）。同一显示器连续关键帧的行集合重叠系数（|A∩B|/min）≥0.75 时合并为一条并给出时间范围，新增行并入；比较键忽略空白与大小写（Vision 对中英混排空格不稳定）。时间：`actualFirstFrameAt + (帧 PTS − 首帧 PTS)`，换算段内偏移；缺少首帧元数据时用段起点并在结果里标记该显示器“时间估算”。
+
+**落盘（机器可读选 `screen-text.json`，不放进 `segment.json` 正文）。** 段目录新增 `screen-text.json`（段 ID/起止、引擎、估算时间的显示器、统计、条目：displayID、绝对起止、段内偏移、合并帧数、行）和 `screen-text.md`（按时间排列，每条标显示器，正文放在 ````text 围栏里；没有识别到文字时只写 JSON，与 `transcript.md` 规则一致）。`segment.json` 只加两个可选字段：`screenText`（`status` pending/complete/failed、`attempts`、`startedAt`/`completedAt`、`error`、`stats`、`preview` 前 3 行、`deleteRequested`）和 `screenDeletedAt`；统计含总帧数、分析帧数、关键帧数、条目数、字符数、识别失败数、Vision 耗时、总处理耗时。旧 JSON 照常解码，未设置时不写出，实验脚本读取的既有字段不变。
+
+```text
+<root>/YYYY-MM-DD/HHmmss-id8/{segment.json,transcript.md,screen-text.json,screen-text.md}
+<root>/screen/YYYY-MM-DD/<uuid>/screen-<displayID>.mp4   # 文字落盘成功后删除，空目录一并删除
+```
+
+**并发写安全。** 音频与画面两个队列都在 MainActor 上但有 await 点：ASR 期间持有的旧 `segment.json` 副本会覆盖 OCR 结果。现在 `LifelogStore.complete`/`markFailed`、`closeUnified` 和重试按钮的音频侧写入走 `saveKeepingScreen`（画面字段保留磁盘值），画面侧只用 `update(in:)` 无挂起地“重读→改→原子写”。
+
+**删除与失败。** 顺序：写 `screen-text.json`/`.md` → 标 `complete` 并记 `deleteRequested`（按处理时的开关）→ 只删本段 screen 目录里的 `screen-*.mp4`（system.wav 在段目录，不受影响）→ 标 `screenDeletedAt`。删除失败只记错误，下次启动补删；之后再打开删除开关不会删以前保留的视频。任一视频读不出、或有关键帧识别失败，状态记 `failed`、`attempts`+1、可读错误，视频与旧结果原样保留；启动恢复自动重试 `attempts < 3` 的失败段，**Retry failed transcripts and screen text (all days)** 手动重试不受次数限制。退出不等 OCR：任务被取消，段保持 `pending`，下次启动从头重算（不保存半段结果）。新段在创建时即标 `pending`，所以崩溃留下的段也会在恢复时尝试（缺 moov 的 mp4 会失败并保留）。根切换门禁同时要求画面队列为空，且没有 pending/failed/未完成删除的画面状态。
+
+**旧数据不自动处理。** 没有 `screenText` 字段的旧段（本版之前录制）启动时**不**调度、不删除；Settings 在存在这类段时显示 **Convert N earlier screen recordings to text**，用户点击才转换，转换后同样按开关删除视频。
+
+**设置。** Always-on 面板新增 **Delete screen video after text recognition**（`lifelog.screenTextDeletesVideo`，默认开，旧安装缺键视为开）。关闭时仍做 OCR，只保留视频。容量上限 `screenCapacityGB` 仍每秒检查 screen 子根逻辑字节并暂停媒体；新增：因容量暂停后，若删除视频使用量降到上限 90% 以下，自动恢复记录（需记录开关仍开）。状态行显示今日画面文字完成/等待/失败段数。
+
+**Today、选段与汇总。** Today 时间线在媒体行之后显示“画面文字”行：状态、字符/帧数、前 3 行预览，**Show more** 读取 `screen-text.json` 最多 60 行（含时间与显示器），可打开 `screen-text.md`；摘要只读 `segment.json`，在视图 `.task` 中按段列表和 `screenTextRevision` 刷新，不在 body 里读文件。录制详情在视频删除后只给“打开画面文字”，否则两者都给。选段保存 `screenItems` 与 `screenTextFile`，`references.md` 链向 `screen-text.md`，视频仍在时才链 screen 目录。选段纪要和每日汇总把画面文字作为 `[screen <displayID>]` 行与逐字稿按时间交错（T3 仍只在 references.md），提示词说明这是本机 OCR、只表示屏幕可见内容、可能有误、重复只出现一次。长度上限（`ScreenTextEvidence`）：同一次汇总/选段内相同行（忽略空白大小写）只取最早一次；每条 ≤10 行、每行 ≤160 字符；每段 ≤3 000 字符；全部画面证据 ≤40 000 字符；被截断处放一条 `…(more screen text omitted)`。只有画面文字、没有语音的段也会进入汇总并链到 `screen-text.md`；画面待识别的段会推迟前一日的补汇总（与音频 pending 相同）。
+
+**本地视觉模型（后续接入点，本轮未实现）。** `LifelogController` 的 `extractScreenText` 注入点（`LifelogScreenTextJob.Extract`：视频列表 + 段起点 → `ScreenTextExtraction`）即替换/叠加点：可在关键帧上额外生成描述并写入条目，默认关闭开关届时再加，不留死设置。
+
+**资源估计（2026-10-08，M3 Max，合成 1920×1080、2 fps 单显示器，见总仓 `.local/tmp/lifelog-screen-ocr/RECORD.md`）。** 30 分钟少量变化（每分钟新增一行）：3600 帧解码、1800 帧分析、30 个关键帧，总 25.4 s（Vision 13.2 s，其余为解码与指纹），用户态 CPU 约 34 s，测试进程峰值 RSS 约 0.28 GB，合并为 3 条、1 925 字符。最坏情况（全屏文字每秒滚动）：10 分钟 200 个关键帧（每 3 s 一个上限），113 s，约 0.54 s/关键帧，单核满载，峰值 RSS 约 0.48 GB，合并为 64 条、约 10.5 万字符；按比例 30 分钟每显示器约 5.6 分钟，两块屏约 11 分钟，仍快于实时。真实 ScreenCaptureKit 录像在静止时帧更少，解码成本更低；真实桌面文字密度、两屏同时繁忙和长期磁盘/CPU 曲线须在 24 小时实验中实测。
+
+验证：`swift test --disable-automatic-resolution -Xswiftc -warnings-as-errors`（含 `ScreenTextExtractorTests` 真实 H.264 解码/去重/时间映射、`LifelogScreenTextTests`、`UnifiedLifecycleTests` 控制器删除/失败恢复/开关/退出/容量/并发写/旧数据），`python3 Tests/test_ui_localization.py`。真实 Vision 探针（不设变量即跳过，只喂合成视频，源文件不修改，结果写到给定根）：
+
+```sh
+MEETING_NOTES_SCREEN_OCR_VIDEO=/abs/synthetic.mp4 MEETING_NOTES_SCREEN_OCR_OUT=/abs/out-root \
+  swift test --disable-automatic-resolution -Xswiftc -warnings-as-errors --filter screenTextVisionProbe
+```
+
+本节新增文件：`ScreenTextExtractor.swift`、`LifelogScreenText.swift`、`Tests/MeetingNotesTests/ScreenTextExtractorTests.swift`、`Tests/MeetingNotesTests/LifelogScreenTextTests.swift`。改动的 fork 自有文件：`LifelogController.swift`、`LifelogStore.swift`、`LifelogSettings.swift`、`LifelogSettingsView.swift`、`DailyEvidenceTimeline.swift`、`LifelogSelection.swift`、`LifelogDigest.swift`、en/zh-Hans `Localizable.strings`、`UnifiedLifecycleTests.swift`。**未改任何上游文件**（`AppModel.swift`、`UILanguage.swift`、`Models.swift`、`UnifiedCapture.swift` 均未动；生产默认 `extractScreenText` 即 Vision 实现，因此 AppModel 不需要传参）。
+
 ## 统一日常记录、Today 与完整 UI 本地化（2026-10-08）
 
-本节替代早期 Today 菜单切片的未集成状态，并覆盖下节 MEET-4 中仅麦克风、静音删段、同步退出的旧行为；旧段/独立会议接口仍兼容。用户已正式确认：T3 保留任务标题、状态、请求和最终答复；屏幕范围为所有亮着的显示器。本轮只完成源码与离线验证，未部署，运行中的 24 小时实验仍是原版二进制。
+屏幕部分已由上节 MEET-5 替代。本节替代早期 Today 菜单切片的未集成状态，并覆盖下节 MEET-4 中仅麦克风、静音删段、同步退出的旧行为；旧段/独立会议接口仍兼容。用户已正式确认：T3 保留任务标题、状态、请求和最终答复；屏幕范围为所有亮着的显示器。本轮只完成源码与离线验证，未部署，运行中的 24 小时实验仍是原版二进制。
 
 主入口是 **开始记录 / 停止记录**，无需会议标题或预先分类；旧会议在“单独会议（高级）”中保留。`AppModel` 向 `LifelogController` 注入 `UnifiedSegmentCapture`。默认新增设置为 unifiedMedia=true、allDisplays=true、screenCapacityGB=10、t3Enabled=true、t3IncludeText=true，原 enabled（默认 false）和音频留存偏好保留。旧安装缺少新字段时采用上述默认；第一次启用或部署后恢复已启用状态时落 enabledAt。加载设置本身不写 defaults。本轮没有运行新 app，因此未迁移实验偏好。
 
