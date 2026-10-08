@@ -135,6 +135,8 @@ final class AppModel {
   private let transcriber = NemotronTranscriber()
   private let live: LiveTranscriptionEngine
   private let final: FinalTranscriptionEngine
+  /// Fork: always-on recording; yields to every meeting capture.
+  let lifelog: LifelogController
   private let enricher = OpenAIEnricher()
   private let captureClock = CaptureClock()
   private let recordingWakeLock = RecordingWakeLock()
@@ -187,6 +189,11 @@ final class AppModel {
       sync: remoteSync)
     live = LiveTranscriptionEngine(transcriber: transcriber)
     final = FinalTranscriptionEngine(transcriber: transcriber)
+    let finalEngine = final
+    let spool = root
+    lifelog = LifelogController(
+      transcribe: { try await finalEngine.process(microphone: $0, system: $1, onDeviceOnly: true) },
+      reservedRoots: { [spool, Self.archiveRootURL(for: ArchiveSettingsStore.load().localPath)] })
     remoteSyncEnabled = archiveConfiguration.remoteSyncEnabled
     remoteHostDraft = archiveConfiguration.host
     remotePathDraft = archiveConfiguration.path
@@ -249,6 +256,7 @@ final class AppModel {
         self?.handleDetectedMeetingApp(app)
       }
       if meetingDetectionEnabled { meetingActivityMonitor.start() }
+      lifelog.activate()
       Task { [weak self] in await self?.loadInitialState() }
     }
   }
@@ -539,7 +547,7 @@ final class AppModel {
     }
     MeetingNotificationService.shared.clearStopSuggestion()
 
-    guard state == .idle else { return }
+    guard state == .idle, !lifelog.settings.enabled else { return }
     detectedMeetingApp = app
     if let app {
       statusText = "\(app) meeting detected"
@@ -948,6 +956,8 @@ final class AppModel {
   var archiveSettingsValidationError: String? {
     let configuration = archiveConfiguration
     if let error = configuration.validationError { return error }
+    if let error = LifelogSettings.rootError(lifelog.settings.rootPath,
+      reserved: [Self.archiveRootURL(for: configuration.localPath)]) { return error }
     let archive = URL(
       fileURLWithPath: (configuration.localPath as NSString).expandingTildeInPath,
       isDirectory: true
@@ -1841,6 +1851,7 @@ final class AppModel {
     // A second meeting should never make the first recording wait out its
     // courtesy delay. Its audio is already safely stored, so finish it now.
     stoppedMeetingGracePeriods.removeAll()
+    lifelog.meetingCaptureWillStart()
     state = .starting
     statusText = "Requesting access…"
     do {
@@ -1937,9 +1948,10 @@ final class AppModel {
       meetingAutoStopScheduler.cancel()
       recordingMeetingApp = nil
       activeRecordingMeetingID = nil
+      try? await store.setStatus(.failed)
+      await lifelog.meetingCaptureDidEnd()
       state = .failed(error.localizedDescription)
       reportError(error.localizedDescription)
-      try? await store.setStatus(.failed)
     }
   }
 
@@ -2079,6 +2091,7 @@ final class AppModel {
 
       // The audio files and an explicit processing state are now durable. Let
       // the next meeting begin while this one is transcribed in the background.
+      await lifelog.meetingCaptureDidEnd()
       state = .idle
       captureClock.reset()
       elapsed = 0
@@ -2092,6 +2105,7 @@ final class AppModel {
       await loadCalendarSuggestion()
     } catch {
       try? await store.setStatus(.failed)
+      await lifelog.meetingCaptureDidEnd()
       state = .failed(error.localizedDescription)
       reportError(error.localizedDescription)
     }

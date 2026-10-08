@@ -59,6 +59,14 @@ class TranscriptionLockTests(unittest.TestCase):
         self.assertTrue(select.select([child.stdout], [], [], 5)[0], 'probe timeout')
         return child.stdout.readline().strip()
 
+    def test_local_only_refuses_cloud_even_inside_shared_entry(self):
+        child = self.child(FIXTURE_OPENAI='1', FIXTURE_LOCAL_ONLY='1')
+        line = self.line(child)
+        self.assertTrue(line.startswith('error:'), line)
+        self.assertIn('LifelogTranscription', line)
+        self.assertEqual(child.wait(timeout=5), 1)
+        self.assertNotIn('entered', child.stdout.read())
+
     def test_same_meeting_waits_across_real_processes(self):
         first = self.child()
         self.assertEqual(self.line(first), 'entered')

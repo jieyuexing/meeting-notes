@@ -43,6 +43,8 @@ struct SettingsView: View {
           CodexSettingsPane(model: model)
         case .summaries:
           SummariesSettingsPane(model: model)
+        case .lifelog:
+          LifelogSettingsPane(lifelog: model.lifelog)
         }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -142,11 +144,12 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
   case hooks
   case openAI
   case tana
+  case lifelog
 
   var id: Self { self }
 
   static let mainPanes: [SettingsPane] = [
-    .general, .microphone, .transcriptions, .summaries, .storage, .openAI,
+    .general, .microphone, .transcriptions, .summaries, .lifelog, .storage, .openAI,
   ]
   static let integrationPanes: [SettingsPane] = [.codex, .tana, .hooks]
 
@@ -161,6 +164,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
     case .openAI: "Credentials"
     case .codex: "ChatGPT"
     case .summaries: "Summaries"
+    case .lifelog: "Always-on"
     }
   }
 
@@ -177,6 +181,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
     // this SF Symbol name is never displayed.
     case .codex: "questionmark"
     case .summaries: "doc.text"
+    case .lifelog: "waveform"
     }
   }
 }

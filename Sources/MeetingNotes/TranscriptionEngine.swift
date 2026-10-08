@@ -592,11 +592,15 @@ actor FinalTranscriptionEngine {
     self.senseVoice = senseVoice
   }
 
-  func process(microphone: URL, system: URL) async throws -> [TranscriptTurn] {
+  func process(microphone: URL, system: URL, onDeviceOnly: Bool = false) async throws -> [TranscriptTurn] {
     let leases = try await TranscriptionLock.acquire(audioURLs: [microphone, system])
     defer { withExtendedLifetime(leases) {} }
     try Task.checkCancellation()
     let engine = TranscriptionEngineSettingsStore.load()
+    if onDeviceOnly && engine == .openAI {
+      throw NSError(domain: "LifelogTranscription", code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "Always-on audio requires an on-device engine."])
+    }
     if engine == .openAI,
       let apiKey = OpenAITranscribeKeychainStore.load(), !apiKey.isEmpty {
       do {

@@ -84,7 +84,8 @@ enum WavFile {
       try await engine.process(
         microphone: folder.appendingPathComponent("microphone.wav"),
         system: URL(fileURLWithPath: ProcessInfo.processInfo.environment["FIXTURE_SYSTEM_FOLDER"] ?? folder.path)
-          .appendingPathComponent("system.wav"))
+          .appendingPathComponent("system.wav"),
+        onDeviceOnly: ProcessInfo.processInfo.environment["FIXTURE_LOCAL_ONLY"] == "1")
     }
     if ProcessInfo.processInfo.environment["FIXTURE_CANCEL"] == "1" {
       try? await Task.sleep(for: .milliseconds(100))
