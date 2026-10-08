@@ -57,6 +57,9 @@ enum LifelogDigest {
     var endedAt: Date
     var lines: [String]
     var segmentID: UUID?
+    /// File a reference links to: the transcript, or the screen text of a
+    /// segment without speech.
+    var file = LifelogStore.transcriptFileName
   }
 
   static func request(for settings: SummaryBackendSettings) -> Request {
@@ -66,22 +69,46 @@ enum LifelogDigest {
     }
   }
 
+  static func hasTranscript(_ segment: LifelogSegment) -> Bool {
+    segment.status == .complete && !(segment.transcript ?? []).isEmpty
+  }
+
+  /// A segment contributes a transcript, recognised screen text, or both.
+  static func isDigestible(_ segment: LifelogSegment) -> Bool {
+    hasTranscript(segment)
+      || (segment.screenText?.status == .complete && (segment.screenText?.stats?.characters ?? 0) > 0)
+  }
+
+  /// Audio or screen text that may still become evidence for the day.
+  static func isWaiting(_ segment: LifelogSegment) -> Bool {
+    segment.status == .pending || segment.status == .recording || segment.screenText?.status == .pending
+  }
+
+  /// Transcript lines and bounded `[screen N]` lines in time order. Screen
+  /// lines share one `ScreenTextEvidence` budget across the day.
   static func entries(store: LifelogStore, day: String) -> [Entry] {
-    store.segments(on: day)
-      .filter { $0.segment.status == .complete && !($0.segment.transcript ?? []).isEmpty }
+    var budget = ScreenTextEvidence.Budget()
+    return store.segments(on: day)
+      .filter { isDigestible($0.segment) }
       .enumerated()
       .map { index, item in
         let segment = item.segment
-        let lines = TranscriptFormatter.mergedLines(segment.transcript ?? []).map {
-          "[\(store.clockText(segment.startedAt + $0.start))] \($0.text)"
-        }
+        let spoken: [(Date, String)] = hasTranscript(segment)
+          ? TranscriptFormatter.mergedLines(segment.transcript ?? []).map {
+            (segment.startedAt + $0.start, "[\(store.clockText(segment.startedAt + $0.start))] \($0.text)")
+          } : []
+        let screen: [(Date, String)] = segment.screenText?.status == .complete
+          ? ScreenTextEvidence.items(store.screenTextDocument(in: item.folder)?.entries ?? [], budget: &budget)
+            .map { ($0.startedAt, ScreenTextEvidence.line($0, store: store)) } : []
         return Entry(
           label: "S\(index + 1)",
           folderPath: "\(day)/\(item.folder.lastPathComponent)",
           startedAt: segment.startedAt,
           endedAt: segment.endedAt ?? segment.startedAt + (segment.audioSeconds ?? 0),
-          lines: lines,
-          segmentID: segment.id)
+          lines: (screen + spoken).enumerated().sorted { ($0.element.0, $0.offset) < ($1.element.0, $1.offset) }
+            .map(\.element.1),
+          segmentID: segment.id,
+          file: hasTranscript(segment) ? LifelogStore.transcriptFileName : LifelogStore.screenTextMarkdownFileName)
       }
   }
 
@@ -206,14 +233,14 @@ enum LifelogDigest {
     """
     Date: \(day)\(total > 1 ? " (part \(part) of \(total) of the day, in time order)" : "")
 
-    These are automatic speech recognition transcripts from an always-on personal microphone. Each "### S<n> · HH:MM–HH:MM" header names one recording segment of that day; each line starts with its local wall-clock time.
+    These are automatic speech recognition transcripts from an always-on personal recorder, plus on-screen text recognized on this Mac (OCR) from its screen recordings. Each "### S<n> · HH:MM–HH:MM" header names one recording segment of that day; each line starts with its local wall-clock time. Lines tagged "[screen N]" are text that was visible on display N at that time: they show what was on screen, not what was said or read, they can be partial or contain recognition errors, and repeated screen text is shown only once. Use them as context for the speech; a period with only screen lines means no speech was recorded.
     Produce a factual digest of this material:
     - overview: a short overview of what happened and was talked about.
     - periods: consecutive local time ranges (HH:MM) with one coherent activity or topic each, in time order, with a short title and summary.
     - actions: to-dos (kind "todo") and agreements or promises (kind "commitment") that were actually mentioned, with the HH:MM time and the segment label (for example "S3") where they occur.
     - reviews: passages worth going back to (important, ambiguous, or where recognition seems wrong), with HH:MM time, segment label and the reason.
     \(language.processingInstruction)
-    Use only the transcript. Speakers are unattributed; never guess who is speaking. The text may contain recognition errors and background speech such as TV or other people. Preserve concrete names, dates and numbers. Return empty arrays when none exist. Never invent missing information.
+    Use only this material. Speakers are unattributed; never guess who is speaking. The text may contain recognition errors and background speech such as TV or other people. Preserve concrete names, dates and numbers. Return empty arrays when none exist. Never invent missing information.
 
     \(OpenAIEnricher.fencedTranscript(chunk))
     """
@@ -263,12 +290,12 @@ enum LifelogDigest {
   static func render(
     day: String, digest: Generated, entries: [Entry], run: Run, store: LifelogStore
   ) -> String {
-    let folders = Dictionary(entries.map { ($0.label, $0.folderPath) }, uniquingKeysWith: { a, _ in a })
+    let files = Dictionary(entries.map { ($0.label, "\($0.folderPath)/\($0.file)") }, uniquingKeysWith: { a, _ in a })
     func reference(_ segment: String, _ time: String) -> String {
       let label = segment.trimmingCharacters(in: .whitespacesAndNewlines)
       let text = "\(label) \(time.trimmingCharacters(in: .whitespacesAndNewlines))"
-      guard let folder = folders[label] else { return text }
-      return "[\(text)](../\(folder)/\(LifelogStore.transcriptFileName))"
+      guard let file = files[label] else { return text }
+      return "[\(text)](../\(file))"
     }
     func list(_ items: [String]) -> String {
       items.isEmpty ? "（无）\n" : items.map { "- \($0)\n" }.joined()
@@ -289,7 +316,7 @@ enum LifelogDigest {
     output += "\n## 段索引\n\n"
     output += list(entries.map {
       let span = "\($0.label) \(store.clockText($0.startedAt, seconds: false))–\(store.clockText($0.endedAt, seconds: false))"
-      return "[\(span)](../\($0.folderPath)/\(LifelogStore.transcriptFileName)) · \($0.lines.count) 行"
+      return "[\(span)](../\($0.folderPath)/\($0.file)) · \($0.lines.count) 行"
     })
     return output
   }

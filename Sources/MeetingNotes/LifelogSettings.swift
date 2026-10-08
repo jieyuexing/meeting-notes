@@ -28,6 +28,9 @@ struct LifelogSettings: Equatable, Sendable {
   var unifiedMedia = true
   var allDisplays = true
   var screenCapacityGB = 10
+  /// Delete a segment's screen videos once its recognised text is saved.
+  /// Off keeps the videos; recognition runs either way.
+  var screenTextDeletesVideo = true
   var t3Enabled = true
   var t3IncludeText = true
   var t3ctlPath = "~/.local/bin/t3ctl"
@@ -127,6 +130,7 @@ enum LifelogSettingsStore {
     settings.unifiedMedia = defaults.object(forKey: "lifelog.unifiedMedia") as? Bool ?? true
     settings.allDisplays = defaults.object(forKey: "lifelog.allDisplays") as? Bool ?? true
     settings.screenCapacityGB = max(1, min(1000, defaults.object(forKey: "lifelog.screenCapacityGB") as? Int ?? 10))
+    settings.screenTextDeletesVideo = defaults.object(forKey: "lifelog.screenTextDeletesVideo") as? Bool ?? true
     settings.t3Enabled = defaults.object(forKey: "lifelog.t3Enabled") as? Bool ?? true
     settings.t3IncludeText = defaults.object(forKey: "lifelog.t3IncludeText") as? Bool ?? true
     settings.t3ctlPath = defaults.string(forKey: "lifelog.t3ctlPath") ?? "~/.local/bin/t3ctl"
@@ -138,6 +142,7 @@ enum LifelogSettingsStore {
     defaults.set(settings.unifiedMedia, forKey: "lifelog.unifiedMedia")
     defaults.set(settings.allDisplays, forKey: "lifelog.allDisplays")
     defaults.set(settings.screenCapacityGB, forKey: "lifelog.screenCapacityGB")
+    defaults.set(settings.screenTextDeletesVideo, forKey: "lifelog.screenTextDeletesVideo")
     defaults.set(settings.t3Enabled, forKey: "lifelog.t3Enabled")
     defaults.set(settings.t3IncludeText, forKey: "lifelog.t3IncludeText")
     defaults.set(settings.t3ctlPath, forKey: "lifelog.t3ctlPath")

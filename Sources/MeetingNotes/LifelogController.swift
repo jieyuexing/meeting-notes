@@ -36,10 +36,16 @@ final class LifelogController {
     var pendingSegments = 0
     var silentSegmentsDiscarded = 0
     var characters = 0
+    var screenTextComplete = 0
+    var screenTextPending = 0
+    var screenTextFailed = 0
   }
 
   static let retryInterval: TimeInterval = 30
   static let interruptionRestartDelay: TimeInterval = 2
+  static let screenLimitMessage = "Screen storage limit reached. Increase the limit or move recordings manually."
+  /// A capacity pause resumes once screen storage is below this share of the limit.
+  static let screenResumeFraction = 0.9
 
   private(set) var phase: Phase = .off
   private(set) var settings: LifelogSettings
@@ -48,6 +54,10 @@ final class LifelogController {
   private(set) var lastError: String?
   private(set) var digestStatusText = ""
   private(set) var digestRunning = false
+  /// Incremented whenever a segment's screen text changes, for Today rows.
+  private(set) var screenTextRevision = 0
+  /// Older segments with videos but no screen-text state; converted on request only.
+  private(set) var legacyScreenSegments = 0
 
   private let defaults: UserDefaults
   private let unified: (any UnifiedSegmentCapturing)?
@@ -70,6 +80,7 @@ final class LifelogController {
   private var usesUnified: Bool { settings.unifiedMedia && unified != nil }
   private let capture: LifelogCapture
   private let transcribe: Transcribe
+  private let extractScreenText: LifelogScreenTextJob.Extract
   private let requestAccess: @Sendable () async -> Bool
   private let transcriptionBlocker: () -> String?
   private let digestRequest: (LifelogSettings) -> LifelogDigest.Request?
@@ -87,6 +98,10 @@ final class LifelogController {
   private var startTask: Task<Void, Never>?
   private var queue: [URL] = []
   private var queueTask: Task<Void, Never>?
+  /// Screen text runs in its own serial queue: it is always local, needs no
+  /// transcription lock and must not wait behind ASR (or block it).
+  private var screenQueue: [URL] = []
+  private var screenTask: Task<Void, Never>?
   private var loopTask: Task<Void, Never>?
   private var observers: [NSObjectProtocol] = []
 
@@ -111,7 +126,8 @@ final class LifelogController {
     reservedRoots: @escaping () -> [URL],
     now: @escaping @Sendable () -> Date = { Date() },
     calendar: Calendar = .autoupdatingCurrent,
-    notesLanguage: @escaping () -> MeetingNotesLanguage = { MeetingNotesLanguageStore.load() }
+    notesLanguage: @escaping () -> MeetingNotesLanguage = { MeetingNotesLanguageStore.load() },
+    extractScreenText: @escaping LifelogScreenTextJob.Extract = LifelogScreenTextJob.defaultExtract
   ) {
     self.defaults = defaults
     self.capture = capture
@@ -125,6 +141,7 @@ final class LifelogController {
     self.now = now
     self.calendar = calendar
     self.notesLanguage = notesLanguage
+    self.extractScreenText = extractScreenText
     settings = LifelogSettingsStore.load(from: defaults)
     if unified != nil, let cached = T3ActivityCollector.cachedSnapshot(root: settings.rootURL, includeText: settings.t3IncludeText) {
       t3Snapshot = cached
@@ -173,6 +190,7 @@ final class LifelogController {
   func activate(observeSystem: Bool = true) {
     if validateRoot() {
       for folder in store.pendingFolders() where !queue.contains(folder) { enqueue(folder) }
+      recoverScreenText()
     }
     if observeSystem {
       let notifications = NSWorkspace.shared.notificationCenter
@@ -246,7 +264,7 @@ final class LifelogController {
       do {
         // Include current/start and the in-flight queue task, not just the queued URLs.
         guard !settings.enabled, !starting, closingTask == nil, current == nil, startTask == nil, queueTask == nil, queue.isEmpty,
-          try !store.hasUnfinishedSegments() else {
+          screenTask == nil, screenQueue.isEmpty, try !store.hasUnfinishedSegments() else {
           lastError = "Stop recording and drain pending/failed segments before changing the archive root."
           return
         }
@@ -266,6 +284,7 @@ final class LifelogController {
     LifelogSettingsStore.save(updated, to: defaults)
     if changingRoot {
       for folder in store.pendingFolders() where !queue.contains(folder) { enqueue(folder) }
+      recoverScreenText()
     }
     await setEnabled(updated.enabled)
   }
@@ -282,6 +301,9 @@ final class LifelogController {
     nextRetryAt = nil
     endSegment(reason: .stopped, restart: false)
     queueTask?.cancel()
+    // Never awaited on quit: interrupted screen text stays pending and
+    // restarts from the beginning on the next launch.
+    screenTask?.cancel()
     phase = .off
   }
 
@@ -354,7 +376,7 @@ final class LifelogController {
         screenBytes = try screenStorageBytes()
         if screenBytes >= Int64(settings.screenCapacityGB) * 1_000_000_000 {
           endSegment(reason: .stopped, restart: false)
-          phase = .blocked("Screen storage limit reached. Increase the limit or move recordings manually.")
+          phase = .blocked(Self.screenLimitMessage)
           return
         }
       } catch {
@@ -385,6 +407,13 @@ final class LifelogController {
       guard let nextRetryAt, time >= nextRetryAt, startTask == nil else { return }
       self.nextRetryAt = nil
       startInBackground()
+    case .blocked(let reason) where reason == Self.screenLimitMessage:
+      // Screen text deletes videos, so a capacity pause can end by itself.
+      guard settings.enabled, usesUnified, startTask == nil, let bytes = try? screenStorageBytes() else { return }
+      screenBytes = bytes
+      if Double(bytes) < Double(settings.screenCapacityGB) * 1_000_000_000 * Self.screenResumeFraction {
+        startInBackground()
+      }
     default:
       break
     }
@@ -397,11 +426,9 @@ final class LifelogController {
     let due = LifelogDigestSchedule.dueDays(
       now: now(), minuteOfDay: settings.digestMinuteOfDay, calendar: calendar,
       run: { store.digestRun(day: $0, label: nil) },
-      transcribedCount: { day in store.segments(on: day).filter { $0.segment.status == .complete }.count },
+      transcribedCount: { day in store.segments(on: day).filter { LifelogDigest.isDigestible($0.segment) }.count },
       pendingCount: { day in
-        store.segments(on: day).filter {
-          $0.segment.status == .pending || $0.segment.status == .recording || $0.folder == currentFolder
-        }.count
+        store.segments(on: day).filter { LifelogDigest.isWaiting($0.segment) || $0.folder == currentFolder }.count
       })
     for day in due { await generateDigest(day: day) }
   }
@@ -443,16 +470,42 @@ final class LifelogController {
         var segment = item.segment
         segment.status = .pending
         do {
-          try store.save(segment, in: item.folder)
+          try store.saveKeepingScreen(segment, in: item.folder)
           enqueue(item.folder)
+        } catch { lastError = error.localizedDescription }
+      }
+      // A manual retry is not limited by the launch-recovery attempt count.
+      for item in store.segments(on: day) where item.segment.screenText?.status == .failed {
+        guard !screenQueue.contains(item.folder) else { continue }
+        do {
+          try store.update(in: item.folder) { $0.screenText?.status = .pending }
+          enqueueScreen(item.folder)
         } catch { lastError = error.localizedDescription }
       }
     }
   }
 
+  /// Explicit conversion of segments recorded before screen text existed.
+  /// Launch recovery never touches them, so deploying cannot silently delete
+  /// earlier videos.
+  func convertLegacyScreenVideos() {
+    guard validateRoot(), !shuttingDown else { return }
+    for folder in store.legacyScreenFolders(excluding: current?.folder) {
+      do {
+        try store.update(in: folder) { $0.screenText = .pending }
+        enqueueScreen(folder)
+      } catch { lastError = error.localizedDescription }
+    }
+    legacyScreenSegments = store.legacyScreenFolders(excluding: current?.folder).count
+  }
+
   func waitForTranscriptions() async {
     await waitForCaptureClose()
     while let queueTask { await queueTask.value }
+  }
+
+  func waitForScreenText() async {
+    while let screenTask { await screenTask.value }
   }
 
   func waitForStart() async {
@@ -496,6 +549,8 @@ final class LifelogController {
       clock.start()
       if usesUnified {
         created.segment.screenRelativeFolder = "screen/\(store.dayKey(started))/\(created.segment.id.uuidString.lowercased())"
+        // Set at creation so even a crashed segment is recognised on recovery.
+        created.segment.screenText = .pending
         try store.save(created.segment, in: created.folder)
       }
       current = created
@@ -545,7 +600,7 @@ final class LifelogController {
       do {
         screenBytes = try screenStorageBytes()
         if screenBytes >= Int64(settings.screenCapacityGB) * 1_000_000_000 {
-          return .blocked("Screen storage limit reached. Increase the limit or move recordings manually.")
+          return .blocked(Self.screenLimitMessage)
         }
       } catch { return .blocked("Cannot inspect screen storage: " + error.localizedDescription) }
     }
@@ -666,18 +721,21 @@ final class LifelogController {
         if let error {
           segment.status = .failed; segment.error = error
           lastError = error
-          try rootStore.save(segment, in: closing.folder)
+          try rootStore.saveKeepingScreen(segment, in: closing.folder)
         } else {
           // Keep even a silent desktop segment: screen artifacts have their
           // own root and never enter discardSilentSegment.
           segment.status = .pending
-          try rootStore.save(segment, in: closing.folder)
+          try rootStore.saveKeepingScreen(segment, in: closing.folder)
           if !shuttingDown { enqueue(closing.folder) }
         }
       } catch {
         lastError = error.localizedDescription
         try? rootStore.markFailed(segment, in: closing.folder, error: error, startedAt: ended)
       }
+      // Every writer has finished. Screen text is independent of speech and
+      // of audio failures; an unreadable video fails on its own and is kept.
+      if !shuttingDown { enqueueScreen(closing.folder) }
       closingTask = nil
       refreshStats()
       if restart, !shuttingDown { startInBackground() }
@@ -843,6 +901,36 @@ final class LifelogController {
     refreshStats()
   }
 
+  // MARK: - Screen text
+
+  private func recoverScreenText() {
+    for folder in store.screenTextRecoveryFolders(excluding: current?.folder) { enqueueScreen(folder) }
+    legacyScreenSegments = store.legacyScreenFolders(excluding: current?.folder).count
+  }
+
+  private func enqueueScreen(_ folder: URL) {
+    guard !screenQueue.contains(folder) else { return }
+    screenQueue.append(folder)
+    guard screenTask == nil, !shuttingDown else { return }
+    screenTask = Task(priority: .utility) { [weak self] in
+      await self?.drainScreenQueue()
+      self?.screenTask = nil
+    }
+  }
+
+  private func drainScreenQueue() async {
+    while !shuttingDown, !Task.isCancelled, let folder = screenQueue.first {
+      screenQueue.removeFirst()
+      let store = LifelogStore(root: folder.deletingLastPathComponent().deletingLastPathComponent(), calendar: calendar)
+      guard LifelogSettings.rootError(store.root.path, reserved: reservedRoots()) == nil else { continue }
+      let outcome = await LifelogScreenTextJob.run(store: store, folder: folder,
+        deleteVideos: settings.screenTextDeletesVideo, extract: extractScreenText, now: now)
+      if case .failed(let message) = outcome { lastError = "Screen text failed: " + message }
+      screenTextRevision += 1
+      refreshStats()
+    }
+  }
+
   // MARK: - Housekeeping
 
   private func startLoop() {
@@ -890,6 +978,12 @@ final class LifelogController {
       case .failed: stats.failedSegments += 1
       case .pending: stats.pendingSegments += 1
       case .recording: break
+      }
+      switch item.segment.screenText?.status {
+      case .complete: stats.screenTextComplete += 1
+      case .pending where item.folder != current?.folder: stats.screenTextPending += 1
+      case .failed: stats.screenTextFailed += 1
+      default: break
       }
     }
     stats.silentSegmentsDiscarded = store.dayStats(day).silentSegmentsDiscarded

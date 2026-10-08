@@ -27,10 +27,23 @@ struct LifelogSettingsPane: View {
         Toggle(UIStrings.text("Screen and system audio"), isOn: $draft.unifiedMedia)
         Toggle(UIStrings.text("All awake displays"), isOn: $draft.allDisplays)
           .disabled(!draft.unifiedMedia)
+        Toggle(UIStrings.text("Delete screen video after text recognition"), isOn: $draft.screenTextDeletesVideo)
+          .disabled(!draft.unifiedMedia)
+        Text(UIStrings.text("After each segment ends, its screen video is turned into timestamped text on this Mac with Apple Vision, including segments without speech. Nothing is uploaded. Off keeps the videos; failed recognition always keeps them for a retry."))
+          .font(.caption).foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
         Stepper(UIStrings.text("Screen limit: \(draft.screenCapacityGB) GB"), value: $draft.screenCapacityGB, in: 1...1000)
-        Text(UIStrings.text("Screen files are kept even without speech. At the limit, media recording pauses; nothing is automatically deleted."))
+        Text(UIStrings.text("The limit is a safety stop: at the limit, media recording pauses and resumes once screen files use less than 90% of it."))
           .font(.caption).foregroundStyle(.secondary)
         Text(UIStrings.text("Screen space used: \(UIStrings.bytes(lifelog.screenBytes))"))
+        if lifelog.legacyScreenSegments > 0 {
+          Button(UIStrings.text("Convert \(lifelog.legacyScreenSegments) earlier screen recordings to text")) {
+            lifelog.convertLegacyScreenVideos()
+          }
+          Text(UIStrings.text("Recordings made before screen text are never converted automatically. With deletion on, their videos are deleted after conversion."))
+            .font(.caption).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
         Toggle(UIStrings.text("Collect T3 task evidence"), isOn: $draft.t3Enabled)
         Toggle(UIStrings.text("Keep T3 requests and final replies"), isOn: $draft.t3IncludeText)
         TextField(UIStrings.text("t3ctl executable"), text: $draft.t3ctlPath)
@@ -63,7 +76,7 @@ struct LifelogSettingsPane: View {
               in: LifelogSettings.maximumSegmentRange, step: 300)
           }
         }
-        Text(UIStrings.text("Audio uses the selected microphone and local final transcription engine. Locks, display sleep and session changes pause media; T3 observation continues. Separate meeting capture temporarily takes over. Audio retention does not delete screen files. Screen capture is a replay reference, not visual recognition."))
+        Text(UIStrings.text("Audio uses the selected microphone and local final transcription engine. Locks, display sleep and session changes pause media; T3 observation continues. Separate meeting capture temporarily takes over. Audio retention does not affect screen files."))
           .font(.caption)
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
@@ -135,7 +148,9 @@ struct LifelogSettingsPane: View {
         UIStrings.text("Today: \(stats.completeSegments) transcribed · \(stats.failedSegments) failed · \(stats.pendingSegments) waiting · \(stats.emptySegments) without speech · \(stats.silentSegmentsDiscarded) silent · \(stats.characters) characters")
       )
       .foregroundStyle(.secondary)
-      Button(UIStrings.text("Retry failed transcripts (all days)")) { lifelog.retryFailedSegments() }
+      Text(UIStrings.text("Screen text today: \(stats.screenTextComplete) ready · \(stats.screenTextPending) waiting · \(stats.screenTextFailed) failed"))
+        .foregroundStyle(.secondary)
+      Button(UIStrings.text("Retry failed transcripts and screen text (all days)")) { lifelog.retryFailedSegments() }
       if let error = lifelog.lastError {
         Text(UIStrings.resolve(error))
           .foregroundStyle(.orange)

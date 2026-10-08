@@ -7,10 +7,17 @@ struct DailyEvidenceTimeline: View {
   let day: Date
   @Environment(\.locale) private var locale
   @State private var inspected: TodayLifelogSummary?
+  /// Loaded from the bounded segment list outside `body`, refreshed when the
+  /// list or any screen-text result changes.
+  @State private var screenTexts: [UUID: ScreenTextSummary] = [:]
+  @State private var expandedScreenText: [UUID: [String]] = [:]
+  static let expandedScreenLines = 60
 
   private struct Row: Identifiable {
     let id: String; let date: Date; let media: TodayLifelogSummary?; let message: T3ActivityCollector.Message?; var run: T3ActivityCollector.Run? = nil
+    var screen: ScreenTextSummary? = nil
   }
+  private struct ScreenTextKey: Equatable { let segments: [TodayLifelogSummary]; let revision: Int }
   private var rows: [Row] {
     let messages = lifelog.t3Snapshot.messages.filter {
       Calendar.current.isDate($0.createdAt, inSameDayAs: day) || Calendar.current.isDate($0.updatedAt, inSameDayAs: day)
@@ -19,7 +26,12 @@ struct DailyEvidenceTimeline: View {
     let start = Calendar.current.startOfDay(for: day)
     let end = Calendar.current.date(byAdding: .day, value: 1, to: start)!
     let runs = lifelog.t3Snapshot.runs.filter { !shown.contains($0.id) && $0.requestedAt < end && ($0.completedAt ?? Date()) >= start }.sorted { ($0.completedAt ?? $0.requestedAt) > ($1.completedAt ?? $1.requestedAt) }.prefix(12)
+    // A screen-text row sits just after its segment's media row.
+    let screens = segments.compactMap { screenTexts[$0.id] }.map {
+      Row(id: "screen-" + $0.segmentID.uuidString, date: $0.startedAt.addingTimeInterval(0.001), media: nil, message: nil, screen: $0)
+    }
     return (segments.map { Row(id: $0.id.uuidString, date: $0.startedAt, media: $0, message: nil) }
+      + screens
       + messages.map { Row(id: $0.threadId + $0.id, date: $0.updatedAt, media: nil, message: $0) }
       + runs.map { Row(id: "run-" + $0.threadId + $0.id, date: $0.completedAt ?? $0.startedAt ?? $0.requestedAt, media: nil, message: nil, run: $0) })
       .sorted { $0.date > $1.date }
@@ -54,6 +66,7 @@ struct DailyEvidenceTimeline: View {
               }
             }
           }
+          if let screen = row.screen { screenTextRow(screen) }
           if let run = row.run {
             let thread = lifelog.t3Snapshot.threads.first { $0.id == run.threadId }
             VStack(alignment: .leading) {
@@ -72,6 +85,16 @@ struct DailyEvidenceTimeline: View {
           .font(.caption)
       }
     }.padding(10)
+      .task(id: ScreenTextKey(segments: segments, revision: lifelog.screenTextRevision)) {
+        var loaded: [UUID: ScreenTextSummary] = [:]
+        for segment in segments {
+          if let record = try? lifelog.store.load(folder: segment.folder),
+            let summary = lifelog.store.screenTextSummary(record, folder: segment.folder)
+          { loaded[segment.id] = summary }
+        }
+        screenTexts = loaded
+        expandedScreenText = expandedScreenText.filter { loaded[$0.key]?.status == .complete }
+      }
       .sheet(item: $inspected) { segment in
         VStack(alignment: .leading, spacing: 12) {
           Text(UIStrings.text("Recording sources")).font(.headline)
@@ -79,9 +102,15 @@ struct DailyEvidenceTimeline: View {
           Text(UIStrings.string(status(segment.status), language: .displayed(for: locale)))
           if let error = segment.error { Text(UIStrings.resolve(error)).foregroundStyle(.orange).textSelection(.enabled) }
           Button(UIStrings.text("Open transcript / audio folder")) { NSWorkspace.shared.open(segment.folder) }
-          if let folder = segment.screenFolder {
-            Button(UIStrings.text("Open screen recordings")) { NSWorkspace.shared.open(folder) }
-            Text(UIStrings.text("Screen references support replay only; visual content has not been recognized."))
+          if segment.screenFolder != nil {
+            let screen = screenTexts[segment.id]
+            if let markdown = screen?.markdownURL {
+              Button(UIStrings.text("Open screen text")) { NSWorkspace.shared.open(markdown) }
+            }
+            if let folder = screen == nil ? segment.screenFolder : screen?.videoFolder {
+              Button(UIStrings.text("Open screen recordings")) { NSWorkspace.shared.open(folder) }
+            }
+            Text(UIStrings.string(screenSourceText(screen), language: .displayed(for: locale)))
             if let media = segment.media {
               ForEach(media.displays, id: \.displayID) { display in
                 Text(UIStrings.text("Display \(display.displayID) · dropped frames: \(display.droppedFrames)"))
@@ -93,6 +122,53 @@ struct DailyEvidenceTimeline: View {
         }.padding(24).frame(width: 500)
       }
   }
+  @ViewBuilder
+  private func screenTextRow(_ screen: ScreenTextSummary) -> some View {
+    let language = UILanguage.displayed(for: locale)
+    VStack(alignment: .leading, spacing: 3) {
+      Label(UIStrings.text("Screen text"), systemImage: "text.viewfinder").fontWeight(.medium)
+      switch screen.status {
+      case .pending: Text(UIStrings.text("Recognizing screen text…"))
+      case .failed:
+        Text(UIStrings.text("Screen text failed; videos are kept for retry.")).foregroundStyle(.orange)
+        if let error = screen.error { Text(UIStrings.resolve(error, language: language)).lineLimit(2) }
+      case .complete where screen.characters == 0: Text(UIStrings.text("No text on screen"))
+      case .complete:
+        Text(UIStrings.text("\(screen.characters) characters · \(screen.keyframes) frames recognized"))
+          .foregroundStyle(.secondary)
+        if let lines = expandedScreenText[screen.segmentID] {
+          ForEach(Array(lines.enumerated()), id: \.offset) { Text($0.element).textSelection(.enabled) }
+          Button(UIStrings.text("Show less")) { expandedScreenText[screen.segmentID] = nil }
+        } else {
+          ForEach(Array(screen.preview.enumerated()), id: \.offset) { Text($0.element).lineLimit(1) }
+          Button(UIStrings.text("Show more")) { expandScreenText(screen) }
+        }
+        if let markdown = screen.markdownURL {
+          Button(UIStrings.text("Open screen text")) { NSWorkspace.shared.open(markdown) }
+        }
+      }
+    }
+  }
+
+  private func expandScreenText(_ screen: ScreenTextSummary) {
+    guard let segment = segments.first(where: { $0.id == screen.segmentID }) else { return }
+    let lines = lifelog.store.screenTextDocument(in: segment.folder)?.entries.flatMap { entry in
+      ["\(entry.startedAt.formatted(.dateTime.hour().minute().second().locale(locale))) · \(UIStrings.text("Display \(entry.displayID)"))"] + entry.lines
+    } ?? []
+    expandedScreenText[screen.segmentID] = Array(lines.prefix(Self.expandedScreenLines))
+  }
+
+  private func screenSourceText(_ screen: ScreenTextSummary?) -> String {
+    guard let screen else { return "Recorded before screen text. Convert earlier recordings in Settings." }
+    switch screen.status {
+    case .pending: return "Recognizing screen text…"
+    case .failed: return "Screen text failed; videos are kept for retry."
+    case .complete: return screen.videosDeleted
+      ? "Screen text was recognized on this Mac; the videos were deleted."
+      : "Screen text was recognized on this Mac; the videos are kept."
+    }
+  }
+
   private func status(_ status: LifelogSegment.Status) -> String {
     switch status { case .recording: "Recording"; case .pending: "Transcribing"; case .complete: "Transcript ready"; case .empty: "No speech"; case .failed: "Transcription failed" }
   }
@@ -138,7 +214,7 @@ struct RecordingSelectionView: View {
       TextField(UIStrings.text("Title"), text: $title).disabled(running)
       DatePicker(UIStrings.text("From"), selection: $start).disabled(running)
       DatePicker(UIStrings.text("To"), selection: $end).disabled(running)
-      Text(UIStrings.text("Uses finished transcripts without another transcription pass. Boundary-crossing sentences are kept in full. Pending and failed sources remain visible."))
+      Text(UIStrings.text("Uses finished transcripts and recognized screen text without another recognition pass. Boundary-crossing sentences are kept in full. Pending and failed sources remain visible."))
         .font(.caption).foregroundStyle(.secondary)
       HStack {
         Button(UIStrings.text("Load selected sources")) { readSelection() }.disabled(running)
@@ -159,6 +235,10 @@ struct RecordingSelectionView: View {
               Text(UIStrings.string(source.status.rawValue, language: .displayed(for: locale)))
               ForEach(source.lines, id: \.turnID) { line in
                 Text(UIStrings.text("[\(line.startedAt.formatted(.dateTime.hour().minute().second().locale(locale)))] [\(UIStrings.string(line.source.rawValue, language: .displayed(for: locale)))] \(line.text)"))
+                  .textSelection(.enabled)
+              }
+              ForEach(Array((source.screenItems ?? []).enumerated()), id: \.offset) { _, item in
+                Text(UIStrings.text("[\(item.startedAt.formatted(.dateTime.hour().minute().second().locale(locale)))] [Screen \(item.displayID)] \(item.text)"))
                   .textSelection(.enabled)
               }
             }
@@ -190,10 +270,14 @@ struct RecordingSelectionView: View {
       if let output {
         // Keep attribution and time overlap in a separate reference artifact.
         let messages = lifelog.t3Snapshot.messages.filter { $0.createdAt < end && $0.updatedAt >= start }
-        var references = "# Replay / task references\n\nTime overlap only; not proof of human focus. Screen content has not been recognized.\n\n"
+        var references = "# Replay / task references\n\nTime overlap only; not proof of human focus. Screen text is local OCR and may contain recognition errors.\n\n"
         for source in selection.sources {
+          // Videos are usually deleted once their text is saved.
+          if let text = source.screenTextFile { references += "- [Screen text](../../\(text))\n" }
           if let segment = try? lifelog.store.load(folder: lifelog.store.root.appending(path: source.relativeFolder)),
-            let screen = segment.screenRelativeFolder { references += "- [Screen](../../\(screen))\n" }
+            let screen = segment.screenRelativeFolder,
+            FileManager.default.fileExists(atPath: lifelog.store.root.appending(path: screen).path)
+          { references += "- [Screen](../../\(screen))\n" }
         }
         for message in messages {
           let thread = lifelog.t3Snapshot.threads.first { $0.id == message.threadId }

@@ -41,7 +41,7 @@
 "Audio never leaves this Mac. SenseVoice writes the final transcript with segment-level timestamps; first use downloads about 450 MB and compiles for 1–3 minutes." = "音频始终留在本机。SenseVoice 生成带片段时间戳的最终逐字稿；首次使用下载约 450 MB，编译耗时 1–3 分钟。";
 "Audio retention and archive sync enabled" = "已启用音频保留与归档同步";
 "Audio setting saved; archive update pending: %@" = "音频设置已保存，归档更新待完成：%@";
-"Audio uses the selected microphone and local final transcription engine. Locks, display sleep and session changes pause media; T3 observation continues. Separate meeting capture temporarily takes over. Audio retention does not delete screen files. Screen capture is a replay reference, not visual recognition." = "音频使用所选麦克风和本地最终转写引擎。锁屏、息屏或会话切换会暂停媒体，T3 观察继续。单独录制会议时暂时接管采集。音频保留策略不删除屏幕文件。屏幕仅用于回看，不进行视觉识别。";
+"Audio uses the selected microphone and local final transcription engine. Locks, display sleep and session changes pause media; T3 observation continues. Separate meeting capture temporarily takes over. Audio retention does not affect screen files." = "音频使用所选麦克风和本地最终转写引擎。锁屏、息屏或会话切换会暂停媒体，T3 观察继续。单独录制会议时暂时接管采集。音频保留策略不影响屏幕文件。";
 "Audio write failed: " = "音频写入失败：";
 "Audio write failed: %@" = "音频写入失败：%@";
 "Authorization is handled by Tana Outliner and stored securely in Keychain." = "通过 Tana Outliner 授权，并安全存入钥匙串。";
@@ -416,7 +416,7 @@
 "Resume failed: %@" = "恢复失败：%@";
 "Retain microphone and system audio and sync it to the archive." = "保留麦克风和系统录音，并同步到归档。";
 "Retry" = "重试";
-"Retry failed transcripts (all days)" = "重试失败的转写（所有日期）";
+"Retry failed transcripts and screen text (all days)" = "重试失败的转写与画面文字（所有日期）";
 "Retry finalization" = "重试完成";
 "Retry notes" = "重试纪要";
 "Retrying structured notes…" = "正在重试结构化纪要…";
@@ -438,10 +438,10 @@
 "Saving recording…" = "正在保存录音…";
 "Screen + microphone + system" = "屏幕＋麦克风＋系统声音";
 "Screen and system audio" = "屏幕与系统声音";
-"Screen files are kept even without speech. At the limit, media recording pauses; nothing is automatically deleted." = "即使没有语音也保留屏幕文件。达到容量上限后暂停媒体记录，不自动删除任何文件。";
+"The limit is a safety stop: at the limit, media recording pauses and resumes once screen files use less than 90% of it." = "上限只是安全兜底：达到上限时暂停媒体记录，屏幕文件降到上限的 90% 以下后自动恢复。";
 "Screen finalization is pending or was interrupted." = "屏幕文件正在收尾，或收尾曾被中断。";
 "Screen limit: %@ GB" = "屏幕容量上限：%@ GB";
-"Screen references support replay only; visual content has not been recognized." = "屏幕引用仅用于回看；尚未识别视觉内容。";
+"Recorded before screen text. Convert earlier recordings in Settings." = "此段录于画面转文字功能之前，可在设置中转换较早的录像。";
 "Screen space used: %@" = "屏幕已用空间：%@";
 "Screen storage limit reached. Increase the limit or move recordings manually." = "已达到屏幕容量上限。请提高上限或手动移走记录。";
 "Search Supertags" = "搜索 Supertag";
@@ -594,7 +594,7 @@
 "Used for the live preview while recording." = "用于录制时的实时预览。";
 "Used for the live preview while recording. OpenAI streams audio continuously, which can get expensive for long meetings." = "用于录制时的实时预览。OpenAI 会持续接收音频，长会议可能产生较高费用。";
 "Used to write the summary and topics for each finished meeting. Default Model uses whichever model ChatGPT runs by default." = "用于生成每场会议的摘要与议题。“默认模型”使用 ChatGPT 的默认模型。";
-"Uses finished transcripts without another transcription pass. Boundary-crossing sentences are kept in full. Pending and failed sources remain visible." = "复用已完成逐字稿，不重新转写。跨越边界的句子整句保留；待处理和失败的来源仍可见。";
+"Uses finished transcripts and recognized screen text without another recognition pass. Boundary-crossing sentences are kept in full. Pending and failed sources remain visible." = "复用已完成的逐字稿和已识别的画面文字，不重新识别。跨越边界的句子整句保留；待处理和失败的来源仍可见。";
 "Uses the app's ChatGPT sign-in and the Codex model settings below." = "使用应用内 ChatGPT 登录及下方 Codex 模型设置。";
 "Version %@" = "版本 %@";
 "Video frame write failed." = "视频帧写入失败。";
@@ -651,3 +651,22 @@
 "Discuss with ChatGPT" = "与 ChatGPT 讨论";
 
 "Extract the tasks and send them to my task manager.\n\nOther ideas: send meeting.md to HubSpot, or save the notes in Slite." = "提取任务并发送到我的任务管理工具。\n\n其他示例：将 meeting.md 发送到 HubSpot，或将纪要保存到 Slite。";
+"%@ characters · %@ frames recognized" = "已识别 %@ 个字符 · %@ 帧";
+"After each segment ends, its screen video is turned into timestamped text on this Mac with Apple Vision, including segments without speech. Nothing is uploaded. Off keeps the videos; failed recognition always keeps them for a retry." = "每段结束后，用本机 Apple Vision 把该段屏幕录像转成带时间戳的文字，没有语音的段也会处理，不上传任何内容。关闭后保留视频；识别失败时始终保留视频以便重试。";
+"Convert %@ earlier screen recordings to text" = "把 %@ 段较早的屏幕录像转成文字";
+"Delete screen video after text recognition" = "画面转文字后删除视频";
+"Display %@" = "显示器 %@";
+"No text on screen" = "画面上没有文字";
+"Open screen text" = "打开画面文字";
+"Recognizing screen text…" = "正在识别画面文字…";
+"Recordings made before screen text are never converted automatically. With deletion on, their videos are deleted after conversion." = "画面转文字功能之前的录像不会自动转换。开启删除时，转换完成后删除其视频。";
+"Screen text" = "画面文字";
+"Screen text failed; videos are kept for retry." = "画面文字识别失败；已保留视频以便重试。";
+"Screen text failed: %@" = "画面文字识别失败：%@";
+"Screen text today: %@ ready · %@ waiting · %@ failed" = "今日画面文字：%@ 段完成 · %@ 段等待 · %@ 段失败";
+"Screen text was recognized on this Mac; the videos are kept." = "画面文字已在本机识别，视频已保留。";
+"Screen text was recognized on this Mac; the videos were deleted." = "画面文字已在本机识别，视频已删除。";
+"Screen video could not be deleted: %@" = "无法删除屏幕视频：%@";
+"Show less" = "收起";
+"Show more" = "展开";
+"[%@] [Screen %@] %@" = "[%@] [屏幕 %@] %@";

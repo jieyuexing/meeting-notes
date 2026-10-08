@@ -16,6 +16,10 @@ struct LifelogSelection: Codable, Equatable, Sendable, Identifiable {
     let relativeFolder: String
     let status: LifelogSegment.Status
     let lines: [Line]
+    /// Recognised screen text overlapping the range, bounded and labelled.
+    var screenItems: [ScreenTextEvidence.Item]? = nil
+    /// Set when `screen-text.md` exists for the source segment.
+    var screenTextFile: String? = nil
   }
 
   enum SelectionError: Error, Equatable {
@@ -49,6 +53,7 @@ struct LifelogSelection: Codable, Equatable, Sendable, Identifiable {
       throw SelectionError.rangeTooLong
     }
     var sources: [Source] = []
+    var budget = ScreenTextEvidence.Budget()
     // Include the preceding day for a segment whose midnight cut was late.
     var date = store.calendar.date(byAdding: .day, value: -1,
       to: store.calendar.startOfDay(for: start)) ?? start
@@ -70,9 +75,15 @@ struct LifelogSelection: Codable, Equatable, Sendable, Identifiable {
             return Line(turnID: turn.id, startedAt: turnStart, endedAt: turnEnd,
               source: turn.source, text: turn.text)
           } : []
-        sources.append(Source(segmentID: segment.id,
-          relativeFolder: "\(day)/\(item.folder.lastPathComponent)",
-          status: segment.status, lines: lines))
+        let screen = segment.screenText?.status == .complete
+          ? ScreenTextEvidence.items(store.screenTextDocument(in: item.folder)?.entries ?? [],
+            from: start, to: end, budget: &budget) : []
+        let relative = "\(day)/\(item.folder.lastPathComponent)"
+        let screenFile = FileManager.default.fileExists(atPath: store.screenTextMarkdownURL(in: item.folder).path)
+          ? "\(relative)/\(LifelogStore.screenTextMarkdownFileName)" : nil
+        sources.append(Source(segmentID: segment.id, relativeFolder: relative,
+          status: segment.status, lines: lines, screenItems: screen.isEmpty ? nil : screen,
+          screenTextFile: screenFile))
       }
       guard let next = store.calendar.date(byAdding: .day, value: 1, to: date), next > date
       else { break }
@@ -83,13 +94,16 @@ struct LifelogSelection: Codable, Equatable, Sendable, Identifiable {
   }
 
   func digestEntries(store: LifelogStore) throws -> [LifelogDigest.Entry] {
-    let entries = sources.filter { !$0.lines.isEmpty }.enumerated().map { index, source in
-      LifelogDigest.Entry(label: "S\(index + 1)", folderPath: source.relativeFolder,
-        startedAt: source.lines.map(\.startedAt).min() ?? startedAt,
-        endedAt: source.lines.map(\.endedAt).max() ?? endedAt,
-        lines: source.lines.map {
-          "[\(store.clockText($0.startedAt))] [\($0.source.rawValue)] \($0.text)"
-        }, segmentID: source.segmentID)
+    let entries = sources.filter { !$0.lines.isEmpty || !($0.screenItems ?? []).isEmpty }.enumerated().map { index, source in
+      let screen = source.screenItems ?? []
+      let timed = screen.map { ($0.startedAt, ScreenTextEvidence.line($0, store: store)) }
+        + source.lines.map { ($0.startedAt, "[\(store.clockText($0.startedAt))] [\($0.source.rawValue)] \($0.text)") }
+      return LifelogDigest.Entry(label: "S\(index + 1)", folderPath: source.relativeFolder,
+        startedAt: (source.lines.map(\.startedAt) + screen.map(\.startedAt)).min() ?? startedAt,
+        endedAt: (source.lines.map(\.endedAt) + screen.map(\.endedAt)).max() ?? endedAt,
+        lines: timed.enumerated().sorted { ($0.element.0, $0.offset) < ($1.element.0, $1.offset) }.map(\.element.1),
+        segmentID: source.segmentID,
+        file: source.lines.isEmpty ? LifelogStore.screenTextMarkdownFileName : LifelogStore.transcriptFileName)
     }
     guard !entries.isEmpty else { throw SelectionError.noFinalText }
     return entries
@@ -113,9 +127,14 @@ struct LifelogSelection: Codable, Equatable, Sendable, Identifiable {
     for source in sources {
       text += "## \(source.segmentID.uuidString) · \(source.status.rawValue)\n\n"
       text += "[Source transcript](../../\(source.relativeFolder)/transcript.md)\n\n"
+      if let screenFile = source.screenTextFile { text += "[Screen text (local OCR)](../../\(screenFile))\n\n" }
       for line in source.lines {
         text += "[\(line.startedAt.ISO8601Format()) – \(line.endedAt.ISO8601Format())] "
           + "[\(line.source.rawValue)] \(line.text)\n\n"
+      }
+      for item in source.screenItems ?? [] {
+        text += "[\(item.startedAt.ISO8601Format()) – \(item.endedAt.ISO8601Format())] "
+          + "[screen \(item.displayID)] \(item.text)\n\n"
       }
     }
     try Data(text.utf8).write(to: folder.appending(path: "transcript.md"), options: .atomic)
